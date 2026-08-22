@@ -2,18 +2,19 @@ import dns from 'node:dns';
 dns.setDefaultResultOrder('ipv4first');
 
 import { Elysia } from 'elysia';
-import { node } from '@elysiajs/node'; // ✅ ESTO ES OBLIGATORIO PARA NODE
+import { node } from '@elysiajs/node';
 import { cors } from '@elysiajs/cors';
 import { ENV } from './shared/config/env';
 import { conectarMongo } from './shared/database/mongo.connection';
 import { Rooms, type WsSessionData } from './shared/websocket/socket.server';
+import { registrarServidorWS } from './shared/websocket/socket.publisher'; // ✅ IMPORTAMOS EL REGISTRO
 
 import { authController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
-
 import { meseroController } from './modules/mesero/mesero.controller';
 import { MeseroService } from './modules/mesero/mesero.service';
 import { juegosController } from './modules/juegos/juegos.controller';
+import { cancionesController } from './modules/canciones/canciones.controller';
 import { InteraccionesService } from './modules/interacciones/interacciones.service';
 import { JuegosService } from './modules/juegos/juegos.service';
 import { VotacionesService } from './modules/votaciones/votaciones.service';
@@ -28,12 +29,16 @@ const interaccionesService = new InteraccionesService();
 const juegosService = new JuegosService();
 const votacionesService = new VotacionesService();
 
-// PASO 3: App Elysia CON ADAPTER NODE (OBLIGATORIO)
-const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
+// 🗄️ VARIABLE GLOBAL PARA GUARDAR TODAS LAS CONEXIONES WEBSOCKET ACTIVAS
+export const conexionesGlobales: any[] = [];
+
+// PASO 3: App Elysia CON ADAPTER NODE
+const app = new Elysia({ adapter: node() })
   .use(cors())
   .use(authController)
   .use(meseroController)
   .use(juegosController)
+  .use(cancionesController)
   .ws('/ws', {
     async open(ws) {
       console.log('🔵 [OPEN] NUEVA CONEXIÓN WEBSOCKET');
@@ -49,7 +54,7 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
         return;
       }
 
-      // ✅ FIX: ADMIN - CONEXIÓN DIRECTA SIN AUTENTICACIÓN
+      // ADMIN - CONEXIÓN DIRECTA
       if (sessionId.startsWith('a361')) {
         console.log('🟢 [OPEN] ADMIN - CONEXIÓN DIRECTA');
         
@@ -60,6 +65,9 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
         };
         
         (ws.data as any).sesion = datosSesion;
+        
+        // 🔥 GUARDAMOS LA CONEXIÓN
+        conexionesGlobales.push(ws);
         
         ws.subscribe(Rooms.general());
         ws.subscribe(Rooms.admin());
@@ -74,7 +82,7 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
         return;
       }
 
-      // ✅ CLIENTES NORMALES
+      // CLIENTES NORMALES
       const sesion = await authService.recuperarSesion(sessionId);
       if (!sesion) {
         console.log(`🔴 [OPEN] Sesión NO encontrada: ${sessionId}`);
@@ -90,6 +98,9 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
 
       (ws.data as any).sesion = datosSesion;
 
+      // 🔥 GUARDAMOS LA CONEXIÓN
+      conexionesGlobales.push(ws);
+
       console.log(`🟢 [OPEN] ✅ CONECTADO - mesa=${datosSesion.mesa} rol=${datosSesion.rol}`);
 
       ws.subscribe(Rooms.general());
@@ -97,9 +108,7 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
       if (sesion.rol === 'admin' || sesion.rol === 'dj') ws.subscribe(Rooms.admin());
       if (['admin', 'dj', 'mesero'].includes(sesion.rol)) ws.subscribe(Rooms.staff());
 
-      // =============================================================
-      // 🔥 NUEVO: ENVIAR LA CONFIGURACIÓN DE PREMIOS AL CONECTARSE
-      // =============================================================
+      // ENVIAR CONFIGURACIÓN DE PREMIOS
       console.log('🚀 [OPEN] Entrando al bloque de envío de premios...');
       try {
         const premiosConfig = await juegosService.obtenerConfiguracionPremios();
@@ -120,9 +129,8 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
         }
       } catch (error) {
         console.error('❌ [OPEN] Error CRÍTICO al obtener o enviar premios:', error);
-        console.trace('🧐 Traza del error:'); // Esto imprime el error en cadena
+        console.trace('🧐 Traza del error:');
       }
-      // =============================================================
 
       ws.send(JSON.stringify({
         tipo: 'EVENT:CONEXION_EXITOSA',
@@ -147,6 +155,7 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
       const { tipo, payload } = data ?? {};
       console.log(`📨 [MESSAGE] ${tipo} - mesa ${sesion.mesa}`);
 
+      // Creamos la función publicar con la referencia directa al WebSocket actual
       const publicar = (canal: string, mensaje: string) => {
         ws.publish(canal, mensaje);
       };
@@ -180,11 +189,11 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
               publicar
             );
             break;
-           case 'ACTION:OBTENER_PREMIOS': {
+
+          case 'ACTION:OBTENER_PREMIOS': {
             console.log('📦 [BACKEND] Cliente solicitó los premios activamente.');
             const premiosConfig = await juegosService.obtenerConfiguracionPremios();
             
-            // 🛑 ESTO ES LO QUE FALTABA: Responder al cliente que preguntó, NO publicar a todos.
             ws.send(JSON.stringify({
               tipo: 'EVENT:RULETA_CONFIGURACION_INICIAL',
               payload: {
@@ -194,7 +203,7 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
             
             console.log('✅ [BACKEND] Premios reenviados al cliente.');
             break;
-          }  
+          }
 
           case 'ACTION:GIRAR_RULETA': {
             const resultado = await juegosService.girarRuletaGeneral(
@@ -232,7 +241,6 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
                 vueltas: resultado.vueltas,
                 duracionMs: resultado.duracionMs,
                 ejecutadoPorMesa: sesion.mesa,
-                // 🔥 NUEVOS CAMPOS
                 esGanador: resultado.esPremioMayor,
                 color: resultado.color,
                 icono: resultado.icono,
@@ -240,6 +248,27 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
             }));
             break;
           }
+
+          case 'ACTION:TOGGLE_PEDIR_CANCION': {
+            console.log(`🎵 [BACKEND] Admin cambió estado a: ${payload.activo}`);
+            interaccionesService.toggleModoPedirCancion(payload.activo, publicar);
+            break;
+          }
+
+          case 'ACTION:GIRAR_SLOT': {
+            const resultado = await juegosService.girarSlot(sesion, publicar);
+
+            ws.send(JSON.stringify({
+              tipo: 'EVENT:SLOT_RESULTADO',
+              payload: {
+                rodillos: resultado.rodillos,
+                premio: resultado.premio,
+                ganador: resultado.premio > 0,
+              },
+            }));
+            break;
+          }
+
           case 'ACTION:MANDAR_BRINDIS':
             interaccionesService.mandarBrindis(sesion, payload?.mesaDestino, publicar);
             break;
@@ -249,7 +278,7 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
             break;
 
           case 'ACTION:ENVIAR_REACCION':
-            interaccionesService.registrarReaccion(payload?.emoji);
+            interaccionesService.registrarReaccion(payload?.emoji, publicar);
             break;
 
           case 'ACTION:FLASH_SYNC_START':
@@ -270,15 +299,31 @@ const app = new Elysia({ adapter: node() }) // ✅ ESTO ES LO QUE FALTA
 
     close(ws, code, reason) {
       const sesion = (ws.data as any).sesion as WsSessionData | undefined;
+      
+      // 🔥 ELIMINAMOS LA CONEXIÓN CERRADA
+      const index = conexionesGlobales.indexOf(ws);
+      if (index > -1) conexionesGlobales.splice(index, 1);
+      
       console.log(`🔴 [CLOSE] Conexión cerrada - mesa=${sesion?.mesa ?? '?'} código=${code}`);
     }
   });
- 
-  app.get("/ping", () => "pong");
 
-app.listen(ENV.PORT, () => {
+app.get("/ping", () => "pong");
+
+// ✅ INICIAR SERVIDOR
+const server = app.listen(ENV.PORT, () => {
   console.log(`🎉 Servidor corriendo en http://localhost:${ENV.PORT}`);
   console.log(`📡 WebSocket en ws://localhost:${ENV.PORT}/ws`);
 });
+
+// 🔥 REGISTRAR EL SERVIDOR DESPUÉS DE QUE YA ESTÉ ESCUCHANDO
+// ⚠️⚠️⚠️ CORRECCIÓN CRÍTICA: Elysia NO usa app.server para publish, usa app.ws
+const bunServer = app.ws; // ⬅️ ESTA es la instancia que tiene el método publish
+if (bunServer) {
+  registrarServidorWS(bunServer);
+  console.log('✅ Servidor WebSocket registrado en publicador');
+} else {
+  console.error('❌ No se pudo obtener el servidor de Bun');
+}
 
 console.log('✅ Servidor iniciado');

@@ -12,6 +12,32 @@ export class MeseroService {
   async solicitarMesero(sesion: WsSessionData, publicar: Publicador) {
     console.log(`🔵 [solicitarMesero] INICIO - mesa: ${sesion.mesa}, sessionId: ${sesion.sessionId}`);
     
+    // 🔥 PRIMERO: Verificar si ya existe una solicitud PENDIENTE para esta mesa
+    const pendientes = await this.repo.listarPendientes();
+    const solicitudExistente = pendientes.find((p) => p.mesa === sesion.mesa);
+    
+    if (solicitudExistente) {
+      console.log(`⚠️ [solicitarMesero] La mesa ${sesion.mesa} YA tiene solicitud pendiente (ID: ${solicitudExistente._id})`);
+      
+      // Re-enviar la solicitud existente (por si el admin no la vio)
+      const mensaje = JSON.stringify({
+        tipo: 'ALERT:LLAMADO_MESERO',
+        payload: {
+          idAlerta: solicitudExistente._id!.toString(),
+          mesa: sesion.mesa,
+          hora: solicitudExistente.createdAt.toISOString(),
+        },
+      });
+      
+      console.log(`📤 [solicitarMesero] Re-publicando solicitud existente en ${Rooms.staff()}`);
+      publicar(Rooms.staff(), mensaje);
+      publicar(Rooms.admin(), mensaje);
+      
+      return solicitudExistente;
+    }
+    
+    // ✅ No existe solicitud pendiente, crear una nueva
+    console.log(`✅ [solicitarMesero] No hay solicitud pendiente, creando nueva...`);
     const alerta = await this.repo.crearLlamada(sesion.sessionId, sesion.mesa);
     console.log(`✅ [solicitarMesero] Alerta creada: ${alerta._id}`);
 
@@ -26,6 +52,7 @@ export class MeseroService {
 
     console.log(`📤 [solicitarMesero] Publicando en ${Rooms.staff()}:`, mensaje);
     publicar(Rooms.staff(), mensaje);
+    publicar(Rooms.admin(), mensaje);
     console.log(`✅ [solicitarMesero] Mensaje publicado en staff`);
 
     return alerta;
@@ -49,8 +76,10 @@ export class MeseroService {
     }
 
     console.log(`✅ [atenderMesa] Rol autorizado: ${sesion.rol}`);
+
+    // ✅ Marcar como ATENDIDA (NO eliminar)
     await this.repo.marcarAtendido(idAlerta);
-    console.log(`✅ [atenderMesa] Alerta ${idAlerta} marcada como atendida`);
+    console.log(`✅ [atenderMesa] Alerta ${idAlerta} marcada como ATENDIDA`);
 
     // ✅ Avisa a todo el staff para que remuevan la alerta de sus pantallas
     const mensajeStaff = JSON.stringify({
@@ -79,6 +108,7 @@ export class MeseroService {
     return { idAlerta, mesa, atendido: true };
   }
 
+  // 3. Obtener todas las llamadas pendientes
   async obtenerPendientes() {
     console.log(`🔵 [obtenerPendientes] Listando llamadas pendientes`);
     const pendientes = await this.repo.listarPendientes();
@@ -86,7 +116,15 @@ export class MeseroService {
     return pendientes;
   }
 
-  // 3. Cierre / Liberación de Mesa
+  // 4. Obtener solo el conteo de pendientes (para el badge 🔔)
+  async obtenerConteoPendientes() {
+    console.log(`🔵 [obtenerConteoPendientes] Contando llamadas pendientes`);
+    const conteo = await this.repo.contarPendientes();
+    console.log(`✅ [obtenerConteoPendientes] ${conteo} llamadas pendientes`);
+    return conteo;
+  }
+
+  // 5. Cierre / Liberación de Mesa
   async liberarMesa(
     sesionSolicitante: WsSessionData,
     numeroMesa: number,
@@ -100,6 +138,8 @@ export class MeseroService {
     }
 
     console.log(`✅ [liberarMesa] Rol autorizado: ${sesionSolicitante.rol}`);
+    
+    // Marcar todos los llamados pendientes de esta mesa como atendidos
     await this.repo.resolverLlamadosPendientesPorMesa(numeroMesa);
     console.log(`✅ [liberarMesa] Llamados pendientes resueltos para mesa ${numeroMesa}`);
 

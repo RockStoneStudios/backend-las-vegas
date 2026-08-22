@@ -1,27 +1,26 @@
-import {ObjectId} from 'mongodb';
-import {getDb} from '../../shared/database/mongo.connection';
-import type {InteraccionMesa} from './mesero.types';
-
+import { ObjectId } from 'mongodb';
+import { getDb } from '../../shared/database/mongo.connection';
+import type { InteraccionMesa } from './mesero.types';
 
 export class MeseroRepository {
-    private get coleccion(){
-      return getDb().collection('alertas_mesero')
+    private get coleccion() {
+        return getDb().collection('alertas_mesero');
     }
 
-    async crearLlamada(usuarioId: string, mesa:number){
-        const doc : InteraccionMesa = {
-            usuarioId,
+    // 1. Crear una nueva llamada
+    async crearLlamada(sessionId: string, mesa: number) {
+        const doc: InteraccionMesa = {
+            usuarioId: sessionId,
             mesa,
-            tipo : 'llamar_mesero',
-            estado : 'pendiente',
-            createdAt : new Date()
+            tipo: 'llamar_mesero',
+            estado: 'pendiente',
+            createdAt: new Date()
         };
-        const {insertedId} = await this.coleccion.insertOne(doc);
-        return {...doc,_id : insertedId}
+        const { insertedId } = await this.coleccion.insertOne(doc);
+        return { ...doc, _id: insertedId };
     }
-    // Marca una llamada como atendida cuando el staff presiona "Atender"
-    // en el panel de admin. Guarda también CUÁNDO fue atendida (atendidoAt),
-    // útil para medir tiempos de respuesta del servicio.
+
+    // 2. Marcar una llamada como atendida
     async marcarAtendido(idAlerta: string) {
         await this.coleccion.updateOne(
             { _id: new ObjectId(idAlerta) },
@@ -29,25 +28,33 @@ export class MeseroRepository {
         );
     }
 
-     // Devuelve todas las llamadas aún sin atender. Se usa cuando el panel
-  // de admin se recarga/abre por primera vez, para mostrar el estado
-  // inicial sin depender solo de eventos de WebSocket en tiempo real.
+    // 3. Listar todas las llamadas pendientes
     async listarPendientes() {
-    return this.coleccion.find({ estado: 'pendiente' }).toArray();
-  }
+        return this.coleccion.find({ estado: 'pendiente' }).toArray();
+    }
 
-   // NUEVO: Resuelve en bloque TODOS los llamados pendientes de una mesa
-  // específica de una sola vez. Se usa cuando el mesero/admin libera la
-  // mesa (ej. los clientes ya se fueron) — evita que quede una alerta
-  // "fantasma" de "llamar mesero" abierta para una mesa que ya está vacía.
-  // updateMany() actualiza todos los documentos que coincidan (por si
-  // hubo más de una llamada pendiente de esa misma mesa a la vez).
-  async resolverLlamadosPendientesPorMesa(mesa: number) {
-    return this.coleccion.updateMany(
-      { mesa, estado: 'pendiente' },
-      { $set: { estado: 'atendido', atendidoAt: new Date() } }
-    );
-  }
+    // 4. Resolver (cerrar) todos los llamados pendientes de una mesa
+    async resolverLlamadosPendientesPorMesa(mesa: number) {
+        return this.coleccion.updateMany(
+            { mesa, estado: 'pendiente' },
+            { $set: { estado: 'atendido', atendidoAt: new Date() } }
+        );
+    }
 
+    // 5. ✅ CAMBIO: En lugar de ELIMINAR, ahora marca como ATENDIDO
+    // Este método ya existe como 'marcarAtendido', así que solo redirigimos
+    async eliminarLlamada(idAlerta: string) {
+        // ❌ NO elimines, mejor marca como atendido
+        await this.marcarAtendido(idAlerta);
+        // O si quieres mantener el nombre 'eliminar' pero con nueva lógica:
+        // await this.coleccion.updateOne(
+        //     { _id: new ObjectId(idAlerta) },
+        //     { $set: { estado: 'atendido', atendidoAt: new Date() } }
+        // );
+    }
 
+    // 🆕 6. Contar pendientes (para el badge 🔔)
+    async contarPendientes() {
+        return this.coleccion.countDocuments({ estado: 'pendiente' });
+    }
 }

@@ -9,11 +9,20 @@ const authService = new AuthService();
 
 export const meseroController = new Elysia({ prefix: '/api/mesero' })
 
+  // 0. Obtener solo el número de llamadas pendientes (para el contador del Admin)
+  .get('/pendientes/conteo', async () => {
+    const pendientes = await meseroService.obtenerPendientes();
+    return { pendientes: pendientes.length };
+  })
   // 1. Obtener todas las llamadas pendientes
   .get('/pendientes', async () => {
     const pendientes = await meseroService.obtenerPendientes();
     return { pendientes };
   })// En mesero.controller.ts
+  .get('/pendientes/conteo', async () => {
+    const pendientes = await meseroService.obtenerConteoPendientes();
+    return { pendientes };
+})
 .post(
   '/llamar',
   async ({ body, headers, set }) => {
@@ -107,42 +116,46 @@ export const meseroController = new Elysia({ prefix: '/api/mesero' })
 
   // 🔴 3. Liberar / Cerrar una mesa
   .post(
-    '/liberar/mesa/:numeroMesa',
-    async ({ params, headers, set }) => {
-      const numeroMesa = Number(params.numeroMesa);
-      const sessionIdStaff = headers['x-session-id'];
+  '/liberar/mesa/:numeroMesa',
+  async ({ params, headers, set }) => {
+    const numeroMesa = Number(params.numeroMesa);
+    const sessionIdStaff = headers['x-session-id'];
 
-      if (!sessionIdStaff) {
-        set.status = 401;
-        return { error: 'Falta el header x-session-id' };
-      }
-
-      const sesionStaff = await authService.recuperarSesion(sessionIdStaff);
-
-      if (!sesionStaff) {
-        set.status = 401;
-        return { error: 'Session Staff invalida o expirada' };
-      }
-
-      const datosSesionStaff: WsSessionData = {
-        sessionId: sesionStaff.sessionId,
-        mesa: sesionStaff.mesa,
-        rol: sesionStaff.rol,
-      };
-
-      try {
-        const resultado = await meseroService.liberarMesa(
-          datosSesionStaff,
-          numeroMesa,
-          publicarEvento
-        );
-        return { ok: true, mesa: numeroMesa, ...resultado };
-      } catch (error) {
-        set.status = 403;
-        return { error: (error as Error).message };
-      }
-    },
-    {
-      headers: t.Object({ 'x-session-id': t.String() }),
+    if (!sessionIdStaff) {
+      set.status = 401;
+      return { error: 'Falta el header x-session-id' };
     }
-  );
+
+    const sesionStaff = await authService.recuperarSesion(sessionIdStaff);
+    if (!sesionStaff) {
+      set.status = 401;
+      return { error: 'Session Staff invalida o expirada' };
+    }
+
+    const datosSesionStaff: WsSessionData = {
+      sessionId: sesionStaff.sessionId,
+      mesa: sesionStaff.mesa,
+      rol: sesionStaff.rol,
+    };
+
+    try {
+      const resultado = await meseroService.liberarMesa(
+        datosSesionStaff,
+        numeroMesa,
+        publicarEvento
+      );
+      
+      // ✅ CORREGIDO: No duplicar 'mesa'
+      return { 
+        ok: true,
+        ...resultado  // resultado ya tiene 'mesa'
+      };
+    } catch (error) {
+      set.status = 403;
+      return { error: (error as Error).message };
+    }
+  },
+  {
+    headers: t.Object({ 'x-session-id': t.String() }),
+  }
+)

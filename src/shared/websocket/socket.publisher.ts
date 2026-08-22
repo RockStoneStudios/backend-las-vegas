@@ -1,17 +1,24 @@
-import type { Server } from 'bun';
-import type { WsSessionData } from './socket.server'; // Revisa que la ruta apunte correctamente a donde está tu archivo con Rooms y WsSessionData
+// shared/websocket/socket.publisher.ts
 
-// Le pasamos <WsSessionData> a Server
-let serverRef: Server<WsSessionData> | null = null;
+let serverRef: any = null;
 
-export function registrarServidorWS(server: Server<WsSessionData>) {
+export function registrarServidorWS(server: any) {
+  console.log('🧪 [DEBUG] Objeto recibido, keys:', Object.keys(server));
   serverRef = server;
 }
 
 export function publicarEvento(canal: string, mensaje: string) {
+  console.log(`📤 [PUBLISHER] Publicando en ${canal}: ${mensaje}`);
+  
   if (!serverRef) {
-    console.warn('⚠️ Intento de publicar antes de registrar el servidor WS');
+    console.warn('⚠️ [PUBLISHER] Server no registrado');
     return;
   }
-  serverRef.publish(canal, mensaje);
+
+  // ✅ TODO EL TRUCO ESTÁ AQUÍ
+  if (typeof serverRef.publish === 'function') {
+    serverRef.publish(canal, mensaje);
+  } else {
+    console.error('❌ El servidor NO tiene la función publish.');
+  }
 }

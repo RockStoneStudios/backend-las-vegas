@@ -31,4 +31,8 @@ export class AuthRepository {
     async cerrarSesionesDeMesa(numeroMesa: number) {
         return await this.coleccion.deleteMany({ mesa: numeroMesa });
     }
+
+    async buscarTodasPorMesa(numeroMesa: number) {
+    return this.coleccion.find({ mesa: numeroMesa }).toArray();
+}
 }

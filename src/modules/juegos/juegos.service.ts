@@ -7,6 +7,16 @@ type Publicador = (canal: string, mensaje: string) => void;
 let BOTELLAS_ENTREGADAS_HOY = 0;
 const MAX_BOTELLAS_PERMITIDAS = 2;
 
+
+const SIMBOLOS = ['🍒', '🍋', '🍊', '🔔', '💎', '7️⃣'];
+const PREMIOS_SLOT = {
+  '💎💎💎': 100,
+  '7️⃣7️⃣7️⃣': 50,
+  '🔔🔔🔔': 20,
+  '🍊🍊🍊': 10,
+  '🍒🍒🍒': 5,
+};
+
 export class JuegosService {
   private repo = new JuegosRepository();
 
@@ -157,6 +167,60 @@ async girarRuletaGeneral(
   // =====================================================================
   // 🎰 2. RULETA DE LA FORTUNA / PREMIOS (Con Dinamismo desde BD + Pesos)
   // =====================================================================
+
+     async girarSlot(sesion: WsSessionData, publicar: Publicador) {
+    // 1. Definir los símbolos y sus pesos (El Jackpot '7️⃣' casi no sale)
+    const SIMBOLOS_CON_PESOS = [
+      { simbolo: '🍸', peso: 30 },  // Muy común
+      { simbolo: '🍷', peso: 25 },  // Común
+      { simbolo: '🍺', peso: 20 },  // Normal
+      { simbolo: '🎲', peso: 15 },  // Raro
+      { simbolo: '💎', peso: 8 },   // Muy raro
+      { simbolo: '7️⃣', peso: 2 }    // ¡Jackpot LAS VEGAS! (Rarísimo)
+    ];
+
+    // 2. Función local para elegir un símbolo usando el sistema ponderado (El tuyo)
+    const seleccionarSimbolo = (): string => {
+      const sumaPesos = SIMBOLOS_CON_PESOS.reduce((acc, s) => acc + s.peso, 0);
+      let rand = Math.random() * sumaPesos;
+      for (const s of SIMBOLOS_CON_PESOS) {
+        if (rand < s.peso) return s.simbolo;
+        rand -= s.peso;
+      }
+      return '🍸'; // Fallback
+    };
+
+    // 3. Generar los 3 rodillos con la selección ponderada
+    const rodillos = Array.from({ length: 3 }, () => {
+      return [seleccionarSimbolo(), seleccionarSimbolo(), seleccionarSimbolo()];
+    });
+
+    // 4. Determinar el resultado (combinación central)
+    const resultadoFinal = rodillos.map(r => r[1]); // La fila del medio
+    const clave = resultadoFinal.join('');
+    
+    // 5. Premio según la combinación
+    const PREMIOS_SLOT = {
+      '7️⃣7️⃣7️⃣': 100, // Jackpot
+      '💎💎💎': 50,
+      '🍸🍸🍸': 20,
+      '🍷🍷🍷': 15,
+      '🍺🍺🍺': 10,
+      '🎲🎲🎲': 5,
+    };
+    const premio = PREMIOS_SLOT[clave as keyof typeof PREMIOS_SLOT] || 0;
+
+    // 6. Emitir el evento SOLO a la mesa que jugó
+    publicar(Rooms.mesa(sesion.mesa), JSON.stringify({
+      tipo: 'EVENT:SLOT_RESULTADO',
+      payload: { rodillos, premio, ganador: premio > 0 }
+    }));
+
+    return { rodillos, premio };
+  }
+
+
+
 async girarRuletaPremios(sesion: WsSessionData, publicar: Publicador) {
   // 1. Cargar los premios dinámicos configurados por el Admin en la BD
   const premiosBD = await this.repo.obtenerPremiosConfigurados();

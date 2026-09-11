@@ -34,7 +34,16 @@ export const conexionesGlobales: any[] = [];
 
 // PASO 3: App Elysia CON ADAPTER NODE
 const app = new Elysia({ adapter: node() })
-  .use(cors())
+  .use(cors({
+  origin: [
+    'https://lasvegasdiscobar.netlify.app',
+    'https://las-vegas-woad.vercel.app',
+    'http://localhost:3000'
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-session-id']
+}))
   .use(authController)
   .use(meseroController)
   .use(juegosController)

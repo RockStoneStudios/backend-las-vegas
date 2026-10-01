@@ -15,6 +15,8 @@ import { meseroController } from './modules/mesero/mesero.controller';
 import { MeseroService } from './modules/mesero/mesero.service';
 import { juegosController } from './modules/juegos/juegos.controller';
 import { cancionesController } from './modules/canciones/canciones.controller';
+import { mesasController } from './modules/mesas/mesas.controller';
+import { reservasController } from './modules/reservas/reservas.controller';
 import { InteraccionesService } from './modules/interacciones/interacciones.service';
 import { JuegosService } from './modules/juegos/juegos.service';
 import { VotacionesService } from './modules/votaciones/votaciones.service';
@@ -48,6 +50,8 @@ const app = new Elysia({ adapter: node() })
   .use(meseroController)
   .use(juegosController)
   .use(cancionesController)
+  .use(mesasController)
+  .use(reservasController)
   .ws('/ws', {
     async open(ws) {
       console.log('🔵 [OPEN] NUEVA CONEXIÓN WEBSOCKET');

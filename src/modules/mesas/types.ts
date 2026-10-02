@@ -1,15 +1,16 @@
 import { t, Static } from 'elysia';
 
-// Tipos de elementos admitidos en el plano (Nainayon ti PISTA_BAILE)
-export type TipoElementoPlano = 'MESA' | 'BARRA' | 'ESCENARIO' | 'VIP' | 'PISTA_BAILE';
+// Tipos de elementos admitidos en el plano
+export type TipoElementoPlano = 'MESA' | 'BARRA' | 'ESCENARIO' | 'VIP' | 'BANO' | 'PISTA_BAILE';
 
-// Esquema Zod/TypeBox con Elysia para validación de entrada
+// Esquema Elysia para validación de entrada
 export const CreateMesaSchema = t.Object({
   numero: t.String({ description: 'Identificador visible (ej: M1, BARRA_1, PISTA)' }),
   tipo: t.Union([
     t.Literal('MESA'),
     t.Literal('BARRA'),
     t.Literal('ESCENARIO'),
+    t.Literal('BANO'),      // ← sin Ñ
     t.Literal('VIP'),
     t.Literal('PISTA_BAILE'),
   ], { default: 'MESA' }),
@@ -21,7 +22,6 @@ export const CreateMesaSchema = t.Object({
   activa: t.Optional(t.Boolean({ default: true })),
 });
 
-// Esquema para actualizar posiciones en lote (Bulk Layout Update)
 export const UpdateLayoutItemSchema = t.Object({
   id: t.String(),
   posX: t.Number(),
@@ -32,7 +32,6 @@ export const UpdateLayoutItemSchema = t.Object({
 
 export const UpdateLayoutSchema = t.Array(UpdateLayoutItemSchema);
 
-// Inferencia de tipos de TypeScript
 export type CreateMesaDTO = Static<typeof CreateMesaSchema>;
 export type UpdateLayoutItemDTO = Static<typeof UpdateLayoutItemSchema>;
 

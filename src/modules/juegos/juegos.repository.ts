@@ -84,13 +84,21 @@ export class JuegosRepository {
   // 3. CONSULTA DE MESAS ACTIVAS POR QR
   // =====================================================================
   async obtenerMesasActivasRegistradas(): Promise<number[]> {
-    const db = getDb();
-    const mesas = await db
-      .collection<{ mesa: number; activo: boolean }>('sesiones')
-      .distinct('mesa', { activo: true });
+  const limiteActividad = new Date(Date.now() - 12 * 60 * 60 * 1000);
 
-    return mesas.filter((m): m is number => typeof m === 'number');
-  }
+  const mesas = await getDb()
+    .collection<{ mesa: number; rol: string; lastSeenAt?: Date }>(
+      'usuarios_sesiones'
+    )
+    .distinct('mesa', {
+      rol: 'cliente',
+      lastSeenAt: { $gte: limiteActividad },
+    });
+
+  return mesas.filter(
+    (mesa): mesa is number => Number.isInteger(mesa) && mesa > 0
+  );
+}
 
   // =====================================================================
   // 4. MÉTODOS DE ESTADO DEL JUEGO

@@ -1,8 +1,12 @@
 
+export type Rol = 'cliente' | 'admin' | 'dj' | 'mesero';
+
 
 export interface UsuarioSesion{
     sessionId : string;
     mesa : number;
-    rol : 'cliente' | 'dj'| 'admin' | 'mesero';
+    deviceId?: string;
+    rol : Rol;
     createdAt : Date;
+    lastSeenAt?:Date
 }

@@ -29,19 +29,37 @@ export const authController = new Elysia({prefix : '/api/auth'})
     };
 })
 .get(
-    '/mesa/:numeroMesa',
-    async ({params,query,set})=>{
-        const numeroMesa = Number(params.numeroMesa);
-        const token = query.token;
-        console.log(`🔑 TOKEN ESPERADO PARA MESA ${numeroMesa}:`, authService.generarHashMesa(numeroMesa));
-        try{
-          const sesion = await authService.iniciarSesionPorQR(numeroMesa,token);
-          return {sessionId : sesion.sessionId, mesa : sesion.mesa}
-        }catch(error){
-          set.status = 401;
-          return {error : (error as Error).message}
-        }
+  '/mesa/:numeroMesa',
+  async ({ params, query, set }) => {
+    try {
+      const numeroMesa = Number(params.numeroMesa);
+      const token = query.token;
+      const deviceId = query.deviceId;
+
+      const sesion = await authService.iniciarSesionPorQR(
+        numeroMesa,
+        token,
+        deviceId
+      );
+
+      return {
+        sessionId: sesion.sessionId,
+        mesa: sesion.mesa,
+      };
+    } catch (error) {
+      set.status = 401;
+
+      return {
+        error: (error as Error).message,
+      };
     }
+  },
+  {
+    query: t.Object({
+      token: t.String({ minLength: 8, maxLength: 128 }),
+      deviceId: t.String({ minLength: 16, maxLength: 128 }),
+    }),
+  }
 ).post(
   '/admin/login',
   async ({ body, set }) => {

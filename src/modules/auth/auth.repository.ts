@@ -2,37 +2,80 @@ import { getDb } from '../../shared/database/mongo.connection';
 import type { UsuarioSesion } from './auth.types';
 
 export class AuthRepository {
-    private get coleccion() {
-        return getDb().collection('usuarios_sesiones');
-    }
+  private get coleccion() {
+    return getDb().collection<UsuarioSesion>('usuarios_sesiones');
+  }
 
-    // Inserta una nueva sesión anónima en la DB cuando alguien escanea el QR
-    async crearSesion(mesa: number, rol: UsuarioSesion['rol'], sessionId: string) {
-        const doc: UsuarioSesion = { sessionId, mesa, rol, createdAt: new Date() };
-        await this.coleccion.insertOne(doc);
-        return doc;
-    }
+  async buscarPorSessionId(sessionId: string) {
+    return this.coleccion.findOne({ sessionId });
+  }
 
-    async buscarPorSessionId(sessionId: string) {
-        return this.coleccion.findOne({ sessionId });
-    }
+  async buscarPorRol(rol: string) {
+    return this.coleccion.findOne({ rol: rol as UsuarioSesion['rol'] });
+  }
 
-    // ✅ BUSCAR POR MESA (NUEVO)
-    async buscarPorMesa(numeroMesa: number) {
-        return this.coleccion.findOne({ mesa: numeroMesa });
-    }
+  async crearORecuperarSesionDispositivo(
+    mesa: number,
+    deviceId: string,
+    sessionIdNuevo: string
+  ) {
+    return this.coleccion.findOneAndUpdate(
+      {
+        mesa,
+        deviceId,
+        rol: 'cliente',
+      },
+      {
+        $setOnInsert: {
+          sessionId: sessionIdNuevo,
+          mesa,
+          deviceId,
+          rol: 'cliente',
+          createdAt: new Date(),
+        },
+        $set: {
+          lastSeenAt: new Date(),
+        },
+      },
+      {
+        upsert: true,
+        returnDocument: 'after',
+      }
+    );
+  }
 
-    // ✅ BUSCAR POR ROL (NUEVO)
-    async buscarPorRol(rol: string) {
-        return this.coleccion.findOne({ rol });
-    }
+  async actualizarUltimaConexion(sessionId: string) {
+    await this.coleccion.updateOne(
+      { sessionId },
+      { $set: { lastSeenAt: new Date() } }
+    );
+  }
 
-    // Cerrar sesiones de mesa
-    async cerrarSesionesDeMesa(numeroMesa: number) {
-        return await this.coleccion.deleteMany({ mesa: numeroMesa });
-    }
+  async crearSesion(
+    mesa: number,
+    rol: UsuarioSesion['rol'],
+    sessionId: string
+  ) {
+    const doc: UsuarioSesion = {
+      sessionId,
+      mesa,
+      rol,
+      createdAt: new Date(),
+      lastSeenAt: new Date(),
+    };
 
-    async buscarTodasPorMesa(numeroMesa: number) {
+    await this.coleccion.insertOne(doc);
+    return doc;
+  }
+
+  async cerrarSesionesDeMesa(numeroMesa: number) {
+    return this.coleccion.deleteMany({
+      mesa: numeroMesa,
+      rol: 'cliente',
+    });
+  }
+
+  async buscarTodasPorMesa(numeroMesa: number) {
     return this.coleccion.find({ mesa: numeroMesa }).toArray();
-}
+  }
 }

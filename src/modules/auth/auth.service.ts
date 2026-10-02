@@ -25,23 +25,39 @@ export class AuthService {
   }
 
   // ✅ INICIAR SESIÓN POR QR
-  async iniciarSesionPorQR(numeroMesa: number, token: string) {
-    const esValido = this.validarHashMesa(numeroMesa, token);
-    if (!esValido) {
-      throw new Error('Token de mesa inválido');
+  async iniciarSesionPorQR(
+  numeroMesa: number,
+  token: string,
+  deviceId: string
+) {
+  if (!Number.isInteger(numeroMesa) || numeroMesa <= 0) {
+    throw new Error('Número de mesa inválido');
+  }
+
+  if (!deviceId || deviceId.length < 16 || deviceId.length > 128) {
+    throw new Error('Identificador de dispositivo inválido');
+  }
+
+  const esValido = this.validarHashMesa(numeroMesa, token);
+
+  if (!esValido) {
+    throw new Error('Token de mesa inválido');
+  }
+
+  const sesion = await this.repo.crearORecuperarSesionDispositivo(
+    numeroMesa,
+    deviceId,
+    randomUUID()
+  );
+
+    if (!sesion) {
+      throw new Error('No fue posible crear o recuperar la sesión');
     }
 
-    // Buscar si ya existe una sesión para esta mesa
-    const sesionExistente = await this.repo.buscarPorMesa(numeroMesa);
-    if (sesionExistente) {
-      console.log(`♻️ [AuthService] Reutilizando sesión existente para mesa ${numeroMesa}: ${sesionExistente.sessionId}`);
-      return sesionExistente;
-    }
-
-    const sessionId = randomUUID();
-    const sesion = await this.repo.crearSesion(numeroMesa, 'cliente', sessionId);
-    console.log(`✅ [AuthService] Sesión creada para mesa ${numeroMesa}: ${sessionId}`);
     return sesion;
+  }
+  async registrarConexion(sessionId: string) {
+    await this.repo.actualizarUltimaConexion(sessionId);
   }
 
   // ✅ RECUPERAR SESIÓN (con fallback para staff en desarrollo)

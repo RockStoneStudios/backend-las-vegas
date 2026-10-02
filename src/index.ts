@@ -97,16 +97,18 @@ const app = new Elysia({ adapter: node() })
 
       // CLIENTES NORMALES
       const sesion = await authService.recuperarSesion(sessionId);
+
       if (!sesion) {
         console.log(`🔴 [OPEN] Sesión NO encontrada: ${sessionId}`);
         ws.close(4002, 'Sesión inválida');
         return;
       }
+      await authService.registrarConexion(sesion.sessionId);
 
       const datosSesion: WsSessionData = {
         sessionId: sesion.sessionId,
         mesa: sesion.mesa,
-        rol: sesion.rol,
+        rol: sesion.rol as WsSessionData['rol'],
       };
 
       (ws.data as any).sesion = datosSesion;

@@ -14,11 +14,23 @@ let dbInstance: Db;
 export async function conectarMongo(): Promise<Db> {
   await client.connect();
   dbInstance = client.db(ENV.MONGO_DB);
-
+   
   await dbInstance
     .collection('usuarios_sesiones')
     .createIndex({ sessionId: 1 }, { unique: true });
-
+    
+  await dbInstance
+  .collection('usuarios_sesiones')
+  .createIndex(
+    { mesa: 1, deviceId: 1, rol: 1 },
+    {
+      unique: true,
+      partialFilterExpression: {
+        rol: 'cliente',
+        deviceId: { $exists: true },
+      },
+    }
+  );
   await dbInstance
     .collection('usuarios_sesiones')
     .createIndex({ createdAt: 1 }, { expireAfterSeconds: 43200 }); // 12h
@@ -28,12 +40,12 @@ export async function conectarMongo(): Promise<Db> {
     .createIndex({ mesa: 1, estado: 1 });
 
   await dbInstance
-    .collection('estado_votaciones')
-    .createIndex({ votacionId: 1 }, { unique: true });
+  .collection('votaciones')
+  .createIndex({ votacionId: 1 }, { unique: true });
 
-  await dbInstance
-    .collection('estado_votaciones')
-    .createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 }); // 24h
+await dbInstance
+  .collection('votaciones')
+  .createIndex({ activa: 1, createdAt: -1 });
 
   console.log('🗄️  MongoDB conectado:', ENV.MONGO_DB);
   return dbInstance;

@@ -11,37 +11,39 @@ export class MeseroService {
   // 1. Cliente en la mesa presiona "Llamar Mesero"
   async solicitarMesero(sesion: WsSessionData, publicar: Publicador) {
     console.log(`🔵 [solicitarMesero] INICIO - mesa: ${sesion.mesa}, sessionId: ${sesion.sessionId}`);
-    
-    // 🔥 PRIMERO: Verificar si ya existe una solicitud PENDIENTE para esta mesa
+
+    // 🔥 Verificar si ya existe una solicitud PENDIENTE para esta mesa
     const pendientes = await this.repo.listarPendientes();
     const solicitudExistente = pendientes.find((p) => p.mesa === sesion.mesa);
-    
+
     if (solicitudExistente) {
       console.log(`⚠️ [solicitarMesero] La mesa ${sesion.mesa} YA tiene solicitud pendiente (ID: ${solicitudExistente._id})`);
-      
-      // Re-enviar la solicitud existente (por si el admin no la vio)
-      const mensaje = JSON.stringify({
-        tipo: 'ALERT:LLAMADO_MESERO',
+
+      // 🆕 Emitir estado BLOQUEADO a TODOS los clientes de la mesa
+      // (por si alguno se conectó después y no lo sabe)
+      const mensajeMesa = JSON.stringify({
+        tipo: 'EVENT:MESERO_SOLICITADO',
         payload: {
-          idAlerta: solicitudExistente._id!.toString(),
           mesa: sesion.mesa,
+          bloqueado: true,
+          idAlerta: solicitudExistente._id!.toString(),
           hora: solicitudExistente.createdAt.toISOString(),
         },
       });
-      
-      console.log(`📤 [solicitarMesero] Re-publicando solicitud existente en ${Rooms.staff()}`);
-      publicar(Rooms.staff(), mensaje);
-      publicar(Rooms.admin(), mensaje);
-      
-      return solicitudExistente;
+      console.log(`📤 [solicitarMesero] Publicando BLOQUEO en ${Rooms.mesa(sesion.mesa)}`);
+      publicar(Rooms.mesa(sesion.mesa), mensajeMesa);
+
+      // 🆕 Lanzar error específico para que el controller responda 409
+      throw new Error('YA_SOLICITADO');
     }
-    
+
     // ✅ No existe solicitud pendiente, crear una nueva
     console.log(`✅ [solicitarMesero] No hay solicitud pendiente, creando nueva...`);
     const alerta = await this.repo.crearLlamada(sesion.sessionId, sesion.mesa);
     console.log(`✅ [solicitarMesero] Alerta creada: ${alerta._id}`);
 
-    const mensaje = JSON.stringify({
+    // 1. Notificar al staff/admin (para el panel de alertas)
+    const mensajeStaff = JSON.stringify({
       tipo: 'ALERT:LLAMADO_MESERO',
       payload: {
         idAlerta: alerta._id!.toString(),
@@ -49,11 +51,25 @@ export class MeseroService {
         hora: alerta.createdAt.toISOString(),
       },
     });
-
-    console.log(`📤 [solicitarMesero] Publicando en ${Rooms.staff()}:`, mensaje);
-    publicar(Rooms.staff(), mensaje);
-    publicar(Rooms.admin(), mensaje);
+    console.log(`📤 [solicitarMesero] Publicando en ${Rooms.staff()}:`, mensajeStaff);
+    publicar(Rooms.staff(), mensajeStaff);
+    publicar(Rooms.admin(), mensajeStaff);
     console.log(`✅ [solicitarMesero] Mensaje publicado en staff`);
+
+    // 2. 🆕 Notificar a TODOS los clientes de la mesa (para bloquear el botón)
+    const mensajeMesa = JSON.stringify({
+      tipo: 'EVENT:MESERO_SOLICITADO',
+      payload: {
+        mesa: sesion.mesa,
+        bloqueado: true,
+        idAlerta: alerta._id!.toString(),
+        hora: alerta.createdAt.toISOString(),
+      },
+    });
+    const canalMesa = Rooms.mesa(sesion.mesa);
+    console.log(`📤 [solicitarMesero] Publicando en ${canalMesa}:`, mensajeMesa);
+    publicar(canalMesa, mensajeMesa);
+    console.log(`✅ [solicitarMesero] Mensaje publicado en mesa ${sesion.mesa}`);
 
     return alerta;
   }
@@ -90,11 +106,15 @@ export class MeseroService {
     publicar(Rooms.staff(), mensajeStaff);
     console.log(`✅ [atenderMesa] Mensaje publicado en staff`);
 
-    // ✅ Avisa a la pantalla de la mesa que su petición ya fue recibida
+    // 🆕 Avisa a TODA la mesa: desbloquear el botón
     if (mesa) {
       const mensajeMesa = JSON.stringify({
-        tipo: 'EVENT:MESERO_EN_CAMINO',
-        payload: { mensaje: 'Un mesero va en camino a tu mesa.' },
+        tipo: 'EVENT:MESERO_ATENDIDO',
+        payload: {
+          mesa,
+          bloqueado: false,
+          mensaje: 'Un mesero va en camino a tu mesa.',
+        },
       });
       const canalMesa = Rooms.mesa(mesa);
       console.log(`📤 [atenderMesa] Publicando en ${canalMesa}:`, mensajeMesa);
@@ -124,6 +144,15 @@ export class MeseroService {
     return conteo;
   }
 
+  // 🆕 4.5. Verificar si una mesa tiene solicitud de mesero pendiente (para re-sync)
+  async mesaTieneSolicitudPendiente(mesa: number): Promise<boolean> {
+    console.log(`🔵 [mesaTieneSolicitudPendiente] Verificando mesa ${mesa}`);
+    const pendientes = await this.repo.listarPendientes();
+    const hayPendiente = pendientes.some((p) => p.mesa === mesa);
+    console.log(`✅ [mesaTieneSolicitudPendiente] Mesa ${mesa} → ${hayPendiente ? 'BLOQUEADA' : 'libre'}`);
+    return hayPendiente;
+  }
+
   // 5. Cierre / Liberación de Mesa
   async liberarMesa(
     sesionSolicitante: WsSessionData,
@@ -138,7 +167,7 @@ export class MeseroService {
     }
 
     console.log(`✅ [liberarMesa] Rol autorizado: ${sesionSolicitante.rol}`);
-    
+
     // Marcar todos los llamados pendientes de esta mesa como atendidos
     await this.repo.resolverLlamadosPendientesPorMesa(numeroMesa);
     console.log(`✅ [liberarMesa] Llamados pendientes resueltos para mesa ${numeroMesa}`);
@@ -150,6 +179,7 @@ export class MeseroService {
       tipo: 'EVENT:MESA_CERRADA',
       payload: {
         mesa: numeroMesa,
+        bloqueado: false,
         mensaje: 'Tu sesión ha finalizado. ¡Gracias por visitarnos!',
       },
     });

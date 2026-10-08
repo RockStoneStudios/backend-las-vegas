@@ -76,6 +76,26 @@ export class VotacionesService {
 
     return doc;
   }
+  // Agrega o verifica este método dentro de tu VotacionesService
+obtenerEstadoInicial() {
+  if (!votacionActiva || !votacionActiva.activa) return null;
+
+  // Calculamos el tiempo restante en segundos
+  const transcurridoSegundos = Math.floor((Date.now() - votacionActiva.iniciadaEn) / 1000);
+  const tiempoRestante = Math.max(0, votacionActiva.duracionSegundos - transcurridoSegundos);
+
+  if (tiempoRestante <= 0) return null;
+
+  return {
+    tipo: 'EVENT:VOTACION_ACTIVA_SYNC',
+    payload: {
+      id: votacionActiva.votacionId,
+      pregunta: votacionActiva.pregunta,
+      opciones: votacionActiva.opciones,
+      duracionRestante: tiempoRestante,
+    },
+  };
+}
 
   /**
    * Registra el voto de un usuario identificándolo POR DISPOSITIVO.
@@ -124,6 +144,7 @@ export class VotacionesService {
 
     return resultado;
   }
+  
 
   async cerrarVotacion(votacionId: string, publicar: Publicador) {
     if (!votacionActiva || votacionActiva.votacionId !== votacionId) {

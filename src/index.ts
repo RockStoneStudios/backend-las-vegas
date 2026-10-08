@@ -96,13 +96,21 @@ const ADMIN_PREFIX = 'a361';
 // le enviamos el estado actual para que se re-sincronice.
 async function enviarEstadoInicial(ws: any) {
   try {
+    const votacionSync = votacionesService.obtenerEstadoInicial();
+
+    // 1. Envía el estado inicial consolidado (incluyendo pedir canciones)
     ws.send(JSON.stringify({
       tipo: 'EVENT:ESTADO_INICIAL',
       payload: {
-        votacionActiva: await votacionesService.obtenerVotacionActiva(),
+        votacionActiva: votacionSync ? votacionSync.payload : null,
         modoPedirCancion: interaccionesService.obtenerEstadoPedirCancion(),
       },
     }));
+
+    // 2. Dispara el evento de sincronización de votación con el tiempo restante exacto
+    if (votacionSync) {
+      ws.send(JSON.stringify(votacionSync));
+    }
   } catch (error) {
     console.error('❌ [OPEN] Error enviando estado inicial:', error);
   }

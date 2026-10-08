@@ -3,7 +3,7 @@ import { Rooms, type WsSessionData } from '../../shared/websocket/socket.server'
 
 type Publicador = (canal: string, mensaje: string) => void;
 
-// 🔥 Estado global en memoria
+// Estado global en memoria
 interface VotacionEnMemoria {
   votacionId: string;
   pregunta: string;
@@ -22,7 +22,6 @@ export class VotacionesService {
 
   /**
    * Abre una nueva votación exprés.
-   * Estado en memoria + cierre automático específico.
    */
   async iniciarVotacion(
     sesion: WsSessionData,
@@ -31,18 +30,14 @@ export class VotacionesService {
     duracionSegundos: number,
     publicar: Publicador
   ) {
-    // 1. Control de acceso
     if (sesion.rol !== 'dj' && sesion.rol !== 'admin') {
       throw new Error('No autorizado: solo el DJ o un Admin pueden abrir una votación');
     }
 
-    // 🔥 Si hay votación anterior, limpiar ANTES de crear la nueva
     this.limpiarVotacionAnterior();
 
-    // 2. Crear en MongoDB
     const doc = await this.repo.crearVotacion(pregunta, opciones);
 
-    // 3. Crear estado en memoria
     votacionActiva = {
       votacionId: doc.votacionId,
       pregunta: doc.pregunta,
@@ -58,7 +53,6 @@ export class VotacionesService {
       timeoutCierre: null,
     };
 
-    // 4. Emitir evento inicial
     publicar(
       Rooms.general(),
       JSON.stringify({
@@ -72,7 +66,6 @@ export class VotacionesService {
       })
     );
 
-    // 🔥 5. Cierre automático ESPECÍFICO (no "la activa")
     const timeoutCierre = setTimeout(() => {
       this.cerrarVotacion(doc.votacionId, publicar).catch((err) => {
         console.error('❌ Error cerrando votación:', err);
@@ -85,8 +78,7 @@ export class VotacionesService {
   }
 
   /**
-   * Registra el voto de un usuario.
-   * Actualiza DB + memoria + broadcast con throttle.
+   * Registra el voto de un usuario identificándolo POR DISPOSITIVO.
    */
   async votar(
     sesion: WsSessionData,
@@ -94,13 +86,19 @@ export class VotacionesService {
     opcionId: number,
     publicar?: Publicador
   ) {
-    // 1. Verificar que la votación esté activa
     if (!votacionActiva || votacionActiva.votacionId !== votacionId || !votacionActiva.activa) {
       return { exito: false, mensaje: 'Votación no activa' };
     }
 
-    // 2. Registrar en DB (anti-duplicados)
-    const resultado = await this.repo.registrarVoto(votacionId, sesion.sessionId, opcionId);
+    // 🔥 Usamos deviceId si existe, o sessionId como fallback si viniera en un cliente viejo
+    const idDispositivo = sesion.deviceId || sesion.sessionId;
+
+    if (!idDispositivo) {
+      return { exito: false, mensaje: 'Identificador de dispositivo no válido' };
+    }
+
+    // 2. Registrar en DB (anti-duplicados por dispositivo)
+    const resultado = await this.repo.registrarVoto(votacionId, idDispositivo, opcionId);
 
     if (!resultado.exito) {
       return resultado;
@@ -119,7 +117,7 @@ export class VotacionesService {
       }
     }
 
-    // 🔥 4. Broadcast con throttle (máx 1 cada 500ms)
+    // 4. Broadcast con throttle (máx 1 cada 500ms)
     if (publicar) {
       this.programarBroadcast(publicar);
     }
@@ -127,9 +125,6 @@ export class VotacionesService {
     return resultado;
   }
 
-  /**
-   * Cierra la votación ESPECÍFICA.
-   */
   async cerrarVotacion(votacionId: string, publicar: Publicador) {
     if (!votacionActiva || votacionActiva.votacionId !== votacionId) {
       return;
@@ -137,7 +132,6 @@ export class VotacionesService {
 
     votacionActiva.activa = false;
 
-    // Limpiar timers
     if (votacionActiva.broadcastTimer) {
       clearTimeout(votacionActiva.broadcastTimer);
       votacionActiva.broadcastTimer = null;
@@ -147,7 +141,6 @@ export class VotacionesService {
       votacionActiva.timeoutCierre = null;
     }
 
-    // Cerrar en DB
     try {
       await this.repo.cerrarVotacion(votacionId);
     } catch (err) {
@@ -193,7 +186,7 @@ export class VotacionesService {
 
   private programarBroadcast(publicar: Publicador) {
     if (!votacionActiva || votacionActiva.broadcastTimer) {
-      return; // ya hay uno pendiente
+      return;
     }
 
     votacionActiva.broadcastTimer = setTimeout(() => {

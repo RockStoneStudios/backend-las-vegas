@@ -19,4 +19,5 @@ export interface WsSessionData {
   sessionId: string;
   mesa: number;
   rol: Rol;
+  deviceId?: string;
 }

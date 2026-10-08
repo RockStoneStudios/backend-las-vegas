@@ -34,22 +34,22 @@ export class VotacionesRepository {
     return { ...doc, _id: res.insertedId };
   }
 
-  // Registrar un voto con validación de no repetición (Operación atómica en MongoDB)
+  // Registrar un voto validado POR DISPOSITIVO (Operación atómica en MongoDB)
   async registrarVoto(
     votacionId: string,
-    sessionId: string,
+    deviceId: string, // 🔥 Ahora valida por dispositivo
     opcionId: number
   ): Promise<{ exito: boolean; votacionActualizada?: EstadoVotacionDB; mensaje?: string }> {
     const resultado = await this.coleccion.findOneAndUpdate(
       {
         votacionId,
         activa: true,
-        'votosUsuarios.sessionId': { $ne: sessionId },
+        'votosUsuarios.deviceId': { $ne: deviceId }, // 🔥 Previene que el mismo dispositivo vote dos veces
         'opciones.id': opcionId,
       },
       {
         $addToSet: {
-          votosUsuarios: { sessionId, opcionId, fecha: new Date() } as any,
+          votosUsuarios: { deviceId, opcionId, fecha: new Date() } as any, // 🔥 Guarda el ID del dispositivo
         },
         $inc: { 'opciones.$.votos': 1 },
       },
@@ -59,7 +59,7 @@ export class VotacionesRepository {
     if (!resultado) {
       return {
         exito: false,
-        mensaje: 'No se pudo registrar el voto (Votación cerrada, opción inválida o ya habías votado)',
+        mensaje: 'No se pudo registrar el voto (Votación cerrada, opción inválida o este dispositivo ya votó)',
       };
     }
 
@@ -74,7 +74,7 @@ export class VotacionesRepository {
     return this.coleccion.findOne({ activa: true });
   }
 
-  // 🔥 NUEVO: Cerrar UNA votación específica (no "la activa")
+  // Cerrar UNA votación específica
   async cerrarVotacion(votacionId: string): Promise<EstadoVotacionDB | null> {
     return this.coleccion.findOneAndUpdate(
       { votacionId, activa: true },

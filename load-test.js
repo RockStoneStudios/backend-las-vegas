@@ -1,12 +1,6 @@
-// load-test.js - v3
-// Test de carga para Las Vegas Discobar
+// load-test.js - v3.2
+// Test de carga para Las Vegas Discobar (Solo Atención al Mesero)
 // Escenario: 200 usuarios concurrentes
-// 
-// Cambios v3:
-// - Separa errores de negocio (YA_SOLICITADO) de errores técnicos WS
-// - Baja frecuencia de OBTENER_PREMIOS (cada 30s por VU, no cada 4-8s)
-// - Métrica de colgadas más realista
-// - Cuenta PINGs y PONGs por separado
 
 import ws from 'k6/ws';
 import { check } from 'k6';
@@ -73,7 +67,6 @@ export default function () {
   let mensajesRecibidosEsteVU = 0;
   let mensajesEnviadosEsteVU = 0;
   let ultimoEnvio = 0;
-  let ultimoPremios = 0;
 
   const res = ws.connect(url, {}, function (socket) {
     socket.on('open', () => {
@@ -81,26 +74,11 @@ export default function () {
       tiempoConexion.add(tiempo);
       wsConectados.add(1);
 
-      // === Acciones periódicas (cada 4-8s) ===
+      // === Solicitar Atención al Mesero (cada 4-8s) ===
       socket.setInterval(() => {
         try {
-          const random = Math.random();
-          let tipoMensaje;
-          let payload;
-
-          if (random < 0.5) {
-            // 50% reacciones
-            tipoMensaje = 'ACTION:ENVIAR_REACCION';
-            payload = { emoji: ['🔥', '❤️', '🍻', '🎉', '👍', '💃', '🍸'][Math.floor(Math.random() * 7)] };
-          } else if (random < 0.8) {
-            // 30% pedir atención al mesero
-            tipoMensaje = 'ACTION:SOLICITAR_ATENCION';
-            payload = { mesa };
-          } else {
-            // 20% brindis
-            tipoMensaje = 'ACTION:MANDAR_BRINDIS';
-            payload = { mesaDestino: (Math.floor(Math.random() * MESAS_TOTALES) + 1) };
-          }
+          const tipoMensaje = 'ACTION:SOLICITAR_ATENCION';
+          const payload = { mesa };
 
           socket.send(JSON.stringify({ tipo: tipoMensaje, payload }));
           mensajesEnviados.add(1);
@@ -109,13 +87,12 @@ export default function () {
         } catch (e) {}
       }, 4000 + Math.random() * 4000);
 
-      // === OBTENER_PREMIOS cada 30s (separado, no en el interval de arriba) ===
+      // === OBTENER_PREMIOS cada 30s ===
       socket.setInterval(() => {
         try {
           socket.send(JSON.stringify({ tipo: 'ACTION:OBTENER_PREMIOS', payload: {} }));
           mensajesEnviados.add(1);
           mensajesEnviadosEsteVU++;
-          ultimoPremios = Date.now();
         } catch (e) {}
       }, 30000);
 
@@ -146,7 +123,7 @@ export default function () {
           return;
         }
 
-        // 🔥 Medir latencia solo para eventos que esperamos como respuesta
+        // 🔥 Medir latencia solo para eventos de atención
         if (msg.tipo === 'EVENT:MESERO_SOLICITADO') {
           if (ultimoEnvio > 0) {
             tiempoRespuestaWS.add(Date.now() - ultimoEnvio);
@@ -156,13 +133,11 @@ export default function () {
     });
 
     socket.on('error', () => {
-      // Solo errores TÉCNICOS del WebSocket (no mensajes ERROR del backend)
       wsErroresTecnicos.add(1);
     });
 
     socket.on('close', () => {
       wsCerrados.add(1);
-      // Si el VU nunca envió nada, cuenta como colgada al cerrar
       if (mensajesEnviadosEsteVU === 0) {
         colgadasAlCerrar.add(1);
       }
@@ -185,7 +160,7 @@ export function handleSummary(data) {
     'hardcore-200.json': JSON.stringify(data, null, 2),
     stdout: `
 ========================================
-  TEST DE CARGA - 200 VUs (v3)
+  TEST DE CARGA - 200 VUs (v3.2 - Solo Atención al Mesero)
 ========================================
 Conexiones exitosas:        ${conectados}
 Errores técnicos WS:        ${erroresTec} ${erroresTec > 20 ? '🚨' : '✅'}

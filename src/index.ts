@@ -97,6 +97,7 @@ const ADMIN_PREFIX = 'a361';
 async function enviarEstadoInicial(ws: any) {
   try {
     const votacionSync = votacionesService.obtenerEstadoInicial();
+    console.log('🧪 [ESTADO_INICIAL] votacionSync =', JSON.stringify(votacionSync));
 
     ws.send(JSON.stringify({
       tipo: 'EVENT:ESTADO_INICIAL',

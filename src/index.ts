@@ -8,7 +8,7 @@ import { ENV } from './shared/config/env';
 import { conectarMongo } from './shared/database/mongo.connection';
 import { Rooms, type WsSessionData } from './shared/websocket/socket.server';
 import { registrarServidorWS } from './shared/websocket/socket.publisher';
-import { logWS } from './shared/utils/logs'; // 🔥 NUEVO
+import { logWS } from './shared/utils/logs';
 
 import { authController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -32,13 +32,81 @@ const interaccionesService = new InteraccionesService();
 const juegosService = new JuegosService();
 const votacionesService = new VotacionesService();
 
-// 🗄️ VARIABLE GLOBAL PARA GUARDAR TODAS LAS CONEXIONES WEBSOCKET ACTIVAS
-export const conexionesGlobales: any[] = [];
+// =============================================================
+// 🔥 HEARTBEAT (un solo intervalo global para todas las conexiones)
+// =============================================================
+// El cliente tiene un watchdog de 60s: el intervalo de PING debe ser menor a eso.
+// El timeout es generoso (~3 pings perdidos) porque los celulares pausan el JS
+// de la pestaña en segundo plano y no pueden responder el PONG.
+const HEARTBEAT_INTERVALO = 25_000; // 25s entre PINGs
+const HEARTBEAT_TIMEOUT = 75_000;   // 75s sin actividad -> se cierra (código 4003)
 
-// 🔥 HEARTBEAT: tracking de última respuesta de cada conexión
-const ultimoPong = new Map<any, number>();
-const HEARTBEAT_INTERVALO = 30000;  // 30s
-const HEARTBEAT_TIMEOUT = 15000;    // 15s de margen
+// Conexiones con heartbeat activo. Se guarda el `ws` del evento open.
+// El último pong y el flag "cerrado" viven en ws.data (que es estable entre eventos).
+const conexionesHeartbeat = new Set<any>();
+
+function iniciarHeartbeat(ws: any) {
+  (ws.data as any).ultimoPong = Date.now();
+  conexionesHeartbeat.add(ws);
+}
+
+setInterval(() => {
+  const ahora = Date.now();
+
+  for (const ws of conexionesHeartbeat) {
+    const data = (ws.data ?? {}) as any;
+
+    // Conexión ya cerrada: limpiar
+    if (data.cerrado) {
+      conexionesHeartbeat.delete(ws);
+      continue;
+    }
+
+    // Demasiado tiempo sin actividad: cerrar
+    if (ahora - (data.ultimoPong ?? 0) > HEARTBEAT_TIMEOUT) {
+      logWS(`💀 [HEARTBEAT] Conexión muerta, cerrando mesa=${data.sesion?.mesa ?? '?'}`);
+      conexionesHeartbeat.delete(ws);
+      try { ws.close(4003, 'Heartbeat timeout'); } catch {}
+      continue;
+    }
+
+    // Enviar PING
+    try {
+      ws.send(JSON.stringify({ tipo: 'PING', payload: { ts: ahora } }));
+    } catch {
+      conexionesHeartbeat.delete(ws);
+    }
+  }
+}, HEARTBEAT_INTERVALO);
+
+// =============================================================
+// 🔐 ADMIN DIRECTO (LEGADO)
+// =============================================================
+// ⚠️ SEGURIDAD: cualquier cliente que conecte con un sessionId que empiece por
+// 'a361' obtiene rol admin SIN validar nada contra la BD.
+// Cuando tu panel admin use una sesión real (AuthService.iniciarSesionAdmin),
+// pon WS_ADMIN_BYPASS=false en tu .env para cerrar este atajo.
+const ADMIN_BYPASS = process.env.WS_ADMIN_BYPASS !== 'false';
+const ADMIN_PREFIX = 'a361';
+
+// =============================================================
+// 📦 ESTADO INICIAL (para clientes que conectan o reconectan)
+// =============================================================
+// Mientras un cliente estuvo desconectado se perdió eventos. Al abrir el socket
+// le enviamos el estado actual para que se re-sincronice.
+async function enviarEstadoInicial(ws: any) {
+  try {
+    ws.send(JSON.stringify({
+      tipo: 'EVENT:ESTADO_INICIAL',
+      payload: {
+        votacionActiva: await votacionesService.obtenerVotacionActiva(),
+        modoPedirCancion: interaccionesService.obtenerEstadoPedirCancion(),
+      },
+    }));
+  } catch (error) {
+    console.error('❌ [OPEN] Error enviando estado inicial:', error);
+  }
+}
 
 // PASO 3: App Elysia CON ADAPTER NODE
 const app = new Elysia({ adapter: node() })
@@ -73,8 +141,8 @@ const app = new Elysia({ adapter: node() })
         return;
       }
 
-      // ADMIN - CONEXIÓN DIRECTA
-      if (sessionId.startsWith('a361')) {
+      // ADMIN - CONEXIÓN DIRECTA (legado, ver ADMIN_BYPASS arriba)
+      if (ADMIN_BYPASS && sessionId.startsWith(ADMIN_PREFIX)) {
         logWS('🟢 [OPEN] ADMIN - CONEXIÓN DIRECTA');
 
         const datosSesion: WsSessionData = {
@@ -85,11 +153,13 @@ const app = new Elysia({ adapter: node() })
 
         (ws.data as any).sesion = datosSesion;
 
-        conexionesGlobales.push(ws);
-
         ws.subscribe(Rooms.general());
         ws.subscribe(Rooms.admin());
         ws.subscribe(Rooms.staff());
+
+        iniciarHeartbeat(ws);
+
+        await enviarEstadoInicial(ws);
 
         ws.send(JSON.stringify({
           tipo: 'EVENT:CONEXION_EXITOSA',
@@ -97,20 +167,31 @@ const app = new Elysia({ adapter: node() })
         }));
 
         logWS(`✅ [OPEN] ADMIN CONECTADO`);
-
-        iniciarHeartbeat(ws);
         return;
       }
 
       // CLIENTES NORMALES
-      const sesion = await authService.recuperarSesion(sessionId);
+      let sesion: any;
+      try {
+        sesion = await authService.recuperarSesion(sessionId);
+      } catch (error) {
+        // Si Mongo falla NO dejamos el socket abierto "a medias":
+        // 1011 no está en NO_RECONECTAR del cliente, así que reintenta con backoff.
+        console.error('❌ [OPEN] Error recuperando sesión:', error);
+        try { ws.close(1011, 'Error interno'); } catch {}
+        return;
+      }
 
       if (!sesion) {
         logWS(`🔴 [OPEN] Sesión NO encontrada: ${sessionId}`);
         ws.close(4002, 'Sesión inválida');
         return;
       }
-      await authService.registrarConexion(sesion.sessionId);
+
+      // Escritura en BD sin bloquear la apertura (en reconexiones masivas ahorra latencia)
+      authService.registrarConexion(sesion.sessionId).catch((e) => {
+        console.error('⚠️ [OPEN] Error registrando conexión:', e);
+      });
 
       const datosSesion: WsSessionData = {
         sessionId: sesion.sessionId,
@@ -120,8 +201,6 @@ const app = new Elysia({ adapter: node() })
 
       (ws.data as any).sesion = datosSesion;
 
-      conexionesGlobales.push(ws);
-
       logWS(`🟢 [OPEN] ✅ CONECTADO - mesa=${datosSesion.mesa} rol=${datosSesion.rol}`);
 
       ws.subscribe(Rooms.general());
@@ -129,29 +208,28 @@ const app = new Elysia({ adapter: node() })
       if (sesion.rol === 'admin' || sesion.rol === 'dj') ws.subscribe(Rooms.admin());
       if (['admin', 'dj', 'mesero'].includes(sesion.rol)) ws.subscribe(Rooms.staff());
 
+      // El heartbeat arranca ya, para que ninguna espera posterior deje un socket sin vigilar
+      iniciarHeartbeat(ws);
+
       // ENVIAR CONFIGURACIÓN DE PREMIOS
-      logWS('🚀 [OPEN] Entrando al bloque de envío de premios...');
       try {
         const premiosConfig = await juegosService.obtenerConfiguracionPremios();
-        logWS('📦 [OPEN] Premios obtenidos del servicio:', premiosConfig);
 
         if (!premiosConfig || premiosConfig.length === 0) {
           console.warn('⚠️ [OPEN] El servicio devolvió una lista vacía de premios. No se envía nada.');
         } else {
-          const mensaje = JSON.stringify({
+          ws.send(JSON.stringify({
             tipo: 'EVENT:RULETA_CONFIGURACION_INICIAL',
-            payload: {
-              premios: premiosConfig,
-            },
-          });
-          logWS('📤 [OPEN] Enviando mensaje al cliente:', mensaje);
-          ws.send(mensaje);
+            payload: { premios: premiosConfig },
+          }));
           logWS(`✅ [OPEN] Configuración de premios enviada a mesa ${sesion.mesa}`);
         }
       } catch (error) {
-        console.error('❌ [OPEN] Error CRÍTICO al obtener o enviar premios:', error);
-        console.trace('🧐 Traza del error:');
+        console.error('❌ [OPEN] Error al obtener o enviar premios:', error);
       }
+
+      // ESTADO ACTUAL (votación activa, modo pedir canción)
+      await enviarEstadoInicial(ws);
 
       ws.send(JSON.stringify({
         tipo: 'EVENT:CONEXION_EXITOSA',
@@ -159,13 +237,14 @@ const app = new Elysia({ adapter: node() })
       }));
 
       logWS(`✅ [OPEN] Conexión exitosa - mesa=${sesion.mesa}`);
-
-      iniciarHeartbeat(ws);
     },
 
     async message(ws, rawMessage) {
       const sesion = (ws.data as any).sesion as WsSessionData | undefined;
       if (!sesion) return;
+
+      // 🔥 Cualquier mensaje del cliente cuenta como "está vivo"
+      (ws.data as any).ultimoPong = Date.now();
 
       let data: any;
       try {
@@ -177,14 +256,9 @@ const app = new Elysia({ adapter: node() })
 
       const { tipo, payload } = data ?? {};
 
-      // 🔥 HEARTBEAT: responder al PONG del cliente
-      if (tipo === 'PONG') {
-        ultimoPong.set(ws, Date.now());
-        return;
-      }
+      // HEARTBEAT: el PONG ya se registró arriba
+      if (tipo === 'PONG') return;
 
-      // 🔥 ANTES: console.log(`📨 [MESSAGE] ${tipo} - mesa ${sesion.mesa}`);
-      // 🔥 AHORA: solo si DEBUG_WS=true
       logWS(`📨 [MESSAGE] ${tipo} - mesa ${sesion.mesa}`);
 
       const publicar = (canal: string, mensaje: string) => {
@@ -227,9 +301,7 @@ const app = new Elysia({ adapter: node() })
 
             ws.send(JSON.stringify({
               tipo: 'EVENT:RULETA_CONFIGURACION_INICIAL',
-              payload: {
-                premios: premiosConfig,
-              },
+              payload: { premios: premiosConfig },
             }));
 
             logWS('✅ [BACKEND] Premios reenviados al cliente.');
@@ -321,72 +393,36 @@ const app = new Elysia({ adapter: node() })
         }
       } catch (error) {
         console.error('❌ Error:', error);
-        ws.send(JSON.stringify({
-          tipo: 'ERROR',
-          payload: { mensaje: (error as Error).message },
-        }));
+        try {
+          ws.send(JSON.stringify({
+            tipo: 'ERROR',
+            payload: { mensaje: (error as Error).message },
+          }));
+        } catch {}
       }
     },
 
     close(ws, code, reason) {
       const sesion = (ws.data as any).sesion as WsSessionData | undefined;
 
-      // 🔥 HEARTBEAT: limpiar timer
-      const timer = (ws.data as any).heartbeatTimer;
-      if (timer) clearInterval(timer);
-      ultimoPong.delete(ws);
-
-      // 🔥 ELIMINAMOS LA CONEXIÓN CERRADA
-      const index = conexionesGlobales.indexOf(ws);
-      if (index > -1) conexionesGlobales.splice(index, 1);
+      // Marcamos la conexión como cerrada; el intervalo global la limpia del Set
+      (ws.data as any).cerrado = true;
 
       logWS(`🔴 [CLOSE] Conexión cerrada - mesa=${sesion?.mesa ?? '?'} código=${code}`);
     }
   });
 
-// 🔥 HEARTBEAT: función que inicia el ping/pong para una conexión
-function iniciarHeartbeat(ws: any) {
-  ultimoPong.set(ws, Date.now());
-
-  const heartbeatTimer = setInterval(() => {
-    const ultimo = ultimoPong.get(ws);
-    if (!ultimo) {
-      clearInterval(heartbeatTimer);
-      return;
-    }
-
-    // Si pasaron más de 45s sin pong, cerramos
-    if (Date.now() - ultimo > HEARTBEAT_INTERVALO + HEARTBEAT_TIMEOUT) {
-      const sesion = (ws.data as any)?.sesion;
-      logWS(`💀 [HEARTBEAT] Conexión muerta, cerrando mesa=${sesion?.mesa ?? '?'}`);
-      clearInterval(heartbeatTimer);
-      ultimoPong.delete(ws);
-      try { ws.close(4003, 'Heartbeat timeout'); } catch (e) {}
-      return;
-    }
-
-    // Enviamos ping
-    try {
-      ws.send(JSON.stringify({ tipo: 'PING', payload: { ts: Date.now() } }));
-    } catch (e) {
-      clearInterval(heartbeatTimer);
-      ultimoPong.delete(ws);
-    }
-  }, HEARTBEAT_INTERVALO);
-
-  (ws.data as any).heartbeatTimer = heartbeatTimer;
-}
-
 app.get("/ping", () => "pong");
 
 // ✅ INICIAR SERVIDOR
 const server = app.listen(ENV.PORT, () => {
-  // 🔥 Estos SÍ se quedan: son logs de arranque, se ven una sola vez
   console.log(`🎉 Servidor corriendo en http://localhost:${ENV.PORT}`);
   console.log(`📡 WebSocket en ws://localhost:${ENV.PORT}/ws`);
 });
 
 // 🔥 REGISTRAR EL SERVIDOR DESPUÉS DE QUE YA ESTÉ ESCUCHANDO
+// ⚠️ TODO: `app.ws` es el método de Elysia para declarar rutas WebSocket, NO el servidor,
+// y siempre es truthy. Revisar socket.publisher.ts para pasar aquí el objeto correcto.
 const bunServer = app.ws;
 if (bunServer) {
   registrarServidorWS(bunServer);

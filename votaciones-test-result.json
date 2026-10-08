@@ -1,0 +1,241 @@
+{
+  "state": {
+    "isStdOutTTY": true,
+    "isStdErrTTY": true,
+    "testRunDurationMs": 100002.1494
+  },
+  "metrics": {
+    "conexiones_ok": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 336,
+        "rate": 3.35992778171226
+      }
+    },
+    "errores_ws": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 179,
+        "rate": 1.7899615265669482
+      },
+      "thresholds": {
+        "count<50": {
+          "ok": false
+        }
+      }
+    },
+    "ws_sessions": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 336,
+        "rate": 3.35992778171226
+      }
+    },
+    "actualizaciones_recibidas": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 8629,
+        "rate": 86.28814532260444
+      }
+    },
+    "ws_connecting": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 4.284909226190474,
+        "min": 0,
+        "med": 3.06665,
+        "max": 47.5977,
+        "p(90)": 5.9855,
+        "p(95)": 10.233525
+      }
+    },
+    "vus_max": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "value": 200,
+        "min": 200,
+        "max": 200
+      }
+    },
+    "pings_recibidos": {
+      "contains": "default",
+      "values": {
+        "count": 237,
+        "rate": 2.3699490603148976
+      },
+      "type": "counter"
+    },
+    "pongs_enviados": {
+      "contains": "default",
+      "values": {
+        "rate": 2.3699490603148976,
+        "count": 237
+      },
+      "type": "counter"
+    },
+    "iteration_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "min": 60020.9643,
+        "med": 60301.6838,
+        "max": 61293.7093,
+        "p(90)": 60352.2754,
+        "p(95)": 60393.041470000004,
+        "avg": 60327.32563296091
+      }
+    },
+    "iterations": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 179,
+        "rate": 1.7899615265669482
+      }
+    },
+    "ws_msgs_sent": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 413,
+        "rate": 4.129911231687986
+      }
+    },
+    "votaciones_recibidas": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 287,
+        "rate": 2.8699383135458887
+      }
+    },
+    "votos_exitosos": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 173,
+        "rate": 1.729962816179229
+      }
+    },
+    "cierres_recibidos": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 199,
+        "rate": 1.9899572278593445
+      }
+    },
+    "tiempo_respuesta_voto_ms": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "max": 1370,
+        "p(90)": 514.8000000000003,
+        "p(95)": 1187.6000000000001,
+        "avg": 318.1387283236994,
+        "min": 2,
+        "med": 247
+      },
+      "thresholds": {
+        "p(95)<1000": {
+          "ok": false
+        }
+      }
+    },
+    "data_sent": {
+      "type": "counter",
+      "contains": "data",
+      "values": {
+        "count": 104255,
+        "rate": 1042.5275919119395
+      }
+    },
+    "ws_session_duration": {
+      "type": "trend",
+      "contains": "time",
+      "values": {
+        "avg": 60326.98675921789,
+        "min": 60020.1153,
+        "med": 60301.0769,
+        "max": 61293.7093,
+        "p(90)": 60351.63304,
+        "p(95)": 60393.041470000004
+      }
+    },
+    "checks": {
+      "type": "rate",
+      "contains": "default",
+      "values": {
+        "rate": 1,
+        "passes": 179,
+        "fails": 0
+      }
+    },
+    "votos_enviados": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 174,
+        "rate": 1.739962601243849
+      }
+    },
+    "data_received": {
+      "contains": "data",
+      "values": {
+        "rate": 25737.576796524336,
+        "count": 2573813
+      },
+      "type": "counter"
+    },
+    "ws_msgs_received": {
+      "type": "counter",
+      "contains": "default",
+      "values": {
+        "count": 10022,
+        "rate": 100.21784591761985
+      }
+    },
+    "vus": {
+      "type": "gauge",
+      "contains": "default",
+      "values": {
+        "value": 2,
+        "min": 2,
+        "max": 200
+      }
+    }
+  },
+  "root_group": {
+    "name": "",
+    "path": "",
+    "id": "d41d8cd98f00b204e9800998ecf8427e",
+    "groups": [],
+    "checks": [
+        {
+          "name": "conexión WS exitosa",
+          "path": "::conexión WS exitosa",
+          "id": "b3eb59072412e17f92707a5276bdd939",
+          "passes": 179,
+          "fails": 0
+        }
+      ]
+  },
+  "options": {
+    "summaryTrendStats": [
+      "avg",
+      "min",
+      "med",
+      "max",
+      "p(90)",
+      "p(95)"
+    ],
+    "summaryTimeUnit": "",
+    "noColor": false
+  }
+}

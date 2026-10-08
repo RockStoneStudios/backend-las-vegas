@@ -7,7 +7,8 @@ import { cors } from '@elysiajs/cors';
 import { ENV } from './shared/config/env';
 import { conectarMongo } from './shared/database/mongo.connection';
 import { Rooms, type WsSessionData } from './shared/websocket/socket.server';
-import { registrarServidorWS } from './shared/websocket/socket.publisher'; // ✅ IMPORTAMOS EL REGISTRO
+import { registrarServidorWS } from './shared/websocket/socket.publisher';
+import { logWS } from './shared/utils/logs'; // 🔥 NUEVO
 
 import { authController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
@@ -34,18 +35,23 @@ const votacionesService = new VotacionesService();
 // 🗄️ VARIABLE GLOBAL PARA GUARDAR TODAS LAS CONEXIONES WEBSOCKET ACTIVAS
 export const conexionesGlobales: any[] = [];
 
+// 🔥 HEARTBEAT: tracking de última respuesta de cada conexión
+const ultimoPong = new Map<any, number>();
+const HEARTBEAT_INTERVALO = 30000;  // 30s
+const HEARTBEAT_TIMEOUT = 15000;    // 15s de margen
+
 // PASO 3: App Elysia CON ADAPTER NODE
 const app = new Elysia({ adapter: node() })
   .use(cors({
-  origin: [
-    'https://lasvegasdiscobar.netlify.app',
-    'https://las-vegas-woad.vercel.app',
-    'http://localhost:3000'
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-session-id']
-}))
+    origin: [
+      'https://lasvegasdiscobar.netlify.app',
+      'https://las-vegas-woad.vercel.app',
+      'http://localhost:3000'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-session-id']
+  }))
   .use(authController)
   .use(meseroController)
   .use(juegosController)
@@ -54,44 +60,45 @@ const app = new Elysia({ adapter: node() })
   .use(reservasController)
   .ws('/ws', {
     async open(ws) {
-      console.log('🔵 [OPEN] NUEVA CONEXIÓN WEBSOCKET');
-      
+      logWS('🔵 [OPEN] NUEVA CONEXIÓN WEBSOCKET');
+
       const url = new URL(ws.data.request.url);
       const sessionId = url.searchParams.get('sessionId');
 
-      console.log(`🔵 [OPEN] sessionId: ${sessionId}`);
+      logWS(`🔵 [OPEN] sessionId: ${sessionId}`);
 
       if (!sessionId) {
-        console.log('🔴 [OPEN] Falta sessionId');
+        console.error('🔴 [OPEN] Falta sessionId');
         ws.close(4001, 'Falta sessionId');
         return;
       }
 
       // ADMIN - CONEXIÓN DIRECTA
       if (sessionId.startsWith('a361')) {
-        console.log('🟢 [OPEN] ADMIN - CONEXIÓN DIRECTA');
-        
+        logWS('🟢 [OPEN] ADMIN - CONEXIÓN DIRECTA');
+
         const datosSesion: WsSessionData = {
           sessionId: sessionId,
           mesa: 0,
           rol: 'admin',
         };
-        
+
         (ws.data as any).sesion = datosSesion;
-        
-        // 🔥 GUARDAMOS LA CONEXIÓN
+
         conexionesGlobales.push(ws);
-        
+
         ws.subscribe(Rooms.general());
         ws.subscribe(Rooms.admin());
         ws.subscribe(Rooms.staff());
-        
+
         ws.send(JSON.stringify({
           tipo: 'EVENT:CONEXION_EXITOSA',
           payload: { mesa: 0, rol: 'admin' }
         }));
-        
-        console.log(`✅ [OPEN] ADMIN CONECTADO`);
+
+        logWS(`✅ [OPEN] ADMIN CONECTADO`);
+
+        iniciarHeartbeat(ws);
         return;
       }
 
@@ -99,7 +106,7 @@ const app = new Elysia({ adapter: node() })
       const sesion = await authService.recuperarSesion(sessionId);
 
       if (!sesion) {
-        console.log(`🔴 [OPEN] Sesión NO encontrada: ${sessionId}`);
+        logWS(`🔴 [OPEN] Sesión NO encontrada: ${sessionId}`);
         ws.close(4002, 'Sesión inválida');
         return;
       }
@@ -113,10 +120,9 @@ const app = new Elysia({ adapter: node() })
 
       (ws.data as any).sesion = datosSesion;
 
-      // 🔥 GUARDAMOS LA CONEXIÓN
       conexionesGlobales.push(ws);
 
-      console.log(`🟢 [OPEN] ✅ CONECTADO - mesa=${datosSesion.mesa} rol=${datosSesion.rol}`);
+      logWS(`🟢 [OPEN] ✅ CONECTADO - mesa=${datosSesion.mesa} rol=${datosSesion.rol}`);
 
       ws.subscribe(Rooms.general());
       if (sesion.mesa) ws.subscribe(Rooms.mesa(sesion.mesa));
@@ -124,10 +130,10 @@ const app = new Elysia({ adapter: node() })
       if (['admin', 'dj', 'mesero'].includes(sesion.rol)) ws.subscribe(Rooms.staff());
 
       // ENVIAR CONFIGURACIÓN DE PREMIOS
-      console.log('🚀 [OPEN] Entrando al bloque de envío de premios...');
+      logWS('🚀 [OPEN] Entrando al bloque de envío de premios...');
       try {
         const premiosConfig = await juegosService.obtenerConfiguracionPremios();
-        console.log('📦 [OPEN] Premios obtenidos del servicio:', premiosConfig);
+        logWS('📦 [OPEN] Premios obtenidos del servicio:', premiosConfig);
 
         if (!premiosConfig || premiosConfig.length === 0) {
           console.warn('⚠️ [OPEN] El servicio devolvió una lista vacía de premios. No se envía nada.');
@@ -138,9 +144,9 @@ const app = new Elysia({ adapter: node() })
               premios: premiosConfig,
             },
           });
-          console.log('📤 [OPEN] Enviando mensaje al cliente:', mensaje);
+          logWS('📤 [OPEN] Enviando mensaje al cliente:', mensaje);
           ws.send(mensaje);
-          console.log(`✅ [OPEN] Configuración de premios enviada a mesa ${sesion.mesa}`);
+          logWS(`✅ [OPEN] Configuración de premios enviada a mesa ${sesion.mesa}`);
         }
       } catch (error) {
         console.error('❌ [OPEN] Error CRÍTICO al obtener o enviar premios:', error);
@@ -151,8 +157,10 @@ const app = new Elysia({ adapter: node() })
         tipo: 'EVENT:CONEXION_EXITOSA',
         payload: { mesa: sesion.mesa, rol: sesion.rol }
       }));
-      
-      console.log(`✅ [OPEN] Conexión exitosa - mesa=${sesion.mesa}`);
+
+      logWS(`✅ [OPEN] Conexión exitosa - mesa=${sesion.mesa}`);
+
+      iniciarHeartbeat(ws);
     },
 
     async message(ws, rawMessage) {
@@ -168,9 +176,17 @@ const app = new Elysia({ adapter: node() })
       }
 
       const { tipo, payload } = data ?? {};
-      console.log(`📨 [MESSAGE] ${tipo} - mesa ${sesion.mesa}`);
 
-      // Creamos la función publicar con la referencia directa al WebSocket actual
+      // 🔥 HEARTBEAT: responder al PONG del cliente
+      if (tipo === 'PONG') {
+        ultimoPong.set(ws, Date.now());
+        return;
+      }
+
+      // 🔥 ANTES: console.log(`📨 [MESSAGE] ${tipo} - mesa ${sesion.mesa}`);
+      // 🔥 AHORA: solo si DEBUG_WS=true
+      logWS(`📨 [MESSAGE] ${tipo} - mesa ${sesion.mesa}`);
+
       const publicar = (canal: string, mensaje: string) => {
         ws.publish(canal, mensaje);
       };
@@ -206,17 +222,17 @@ const app = new Elysia({ adapter: node() })
             break;
 
           case 'ACTION:OBTENER_PREMIOS': {
-            console.log('📦 [BACKEND] Cliente solicitó los premios activamente.');
+            logWS('📦 [BACKEND] Cliente solicitó los premios activamente.');
             const premiosConfig = await juegosService.obtenerConfiguracionPremios();
-            
+
             ws.send(JSON.stringify({
               tipo: 'EVENT:RULETA_CONFIGURACION_INICIAL',
               payload: {
                 premios: premiosConfig,
               },
             }));
-            
-            console.log('✅ [BACKEND] Premios reenviados al cliente.');
+
+            logWS('✅ [BACKEND] Premios reenviados al cliente.');
             break;
           }
 
@@ -265,7 +281,7 @@ const app = new Elysia({ adapter: node() })
           }
 
           case 'ACTION:TOGGLE_PEDIR_CANCION': {
-            console.log(`🎵 [BACKEND] Admin cambió estado a: ${payload.activo}`);
+            logWS(`🎵 [BACKEND] Admin cambió estado a: ${payload.activo}`);
             interaccionesService.toggleModoPedirCancion(payload.activo, publicar);
             break;
           }
@@ -301,7 +317,7 @@ const app = new Elysia({ adapter: node() })
             break;
 
           default:
-            console.log(`⚠️ Evento no reconocido: ${tipo}`);
+            logWS(`⚠️ Evento no reconocido: ${tipo}`);
         }
       } catch (error) {
         console.error('❌ Error:', error);
@@ -314,26 +330,64 @@ const app = new Elysia({ adapter: node() })
 
     close(ws, code, reason) {
       const sesion = (ws.data as any).sesion as WsSessionData | undefined;
-      
+
+      // 🔥 HEARTBEAT: limpiar timer
+      const timer = (ws.data as any).heartbeatTimer;
+      if (timer) clearInterval(timer);
+      ultimoPong.delete(ws);
+
       // 🔥 ELIMINAMOS LA CONEXIÓN CERRADA
       const index = conexionesGlobales.indexOf(ws);
       if (index > -1) conexionesGlobales.splice(index, 1);
-      
-      console.log(`🔴 [CLOSE] Conexión cerrada - mesa=${sesion?.mesa ?? '?'} código=${code}`);
+
+      logWS(`🔴 [CLOSE] Conexión cerrada - mesa=${sesion?.mesa ?? '?'} código=${code}`);
     }
   });
+
+// 🔥 HEARTBEAT: función que inicia el ping/pong para una conexión
+function iniciarHeartbeat(ws: any) {
+  ultimoPong.set(ws, Date.now());
+
+  const heartbeatTimer = setInterval(() => {
+    const ultimo = ultimoPong.get(ws);
+    if (!ultimo) {
+      clearInterval(heartbeatTimer);
+      return;
+    }
+
+    // Si pasaron más de 45s sin pong, cerramos
+    if (Date.now() - ultimo > HEARTBEAT_INTERVALO + HEARTBEAT_TIMEOUT) {
+      const sesion = (ws.data as any)?.sesion;
+      logWS(`💀 [HEARTBEAT] Conexión muerta, cerrando mesa=${sesion?.mesa ?? '?'}`);
+      clearInterval(heartbeatTimer);
+      ultimoPong.delete(ws);
+      try { ws.close(4003, 'Heartbeat timeout'); } catch (e) {}
+      return;
+    }
+
+    // Enviamos ping
+    try {
+      ws.send(JSON.stringify({ tipo: 'PING', payload: { ts: Date.now() } }));
+    } catch (e) {
+      clearInterval(heartbeatTimer);
+      ultimoPong.delete(ws);
+    }
+  }, HEARTBEAT_INTERVALO);
+
+  (ws.data as any).heartbeatTimer = heartbeatTimer;
+}
 
 app.get("/ping", () => "pong");
 
 // ✅ INICIAR SERVIDOR
 const server = app.listen(ENV.PORT, () => {
+  // 🔥 Estos SÍ se quedan: son logs de arranque, se ven una sola vez
   console.log(`🎉 Servidor corriendo en http://localhost:${ENV.PORT}`);
   console.log(`📡 WebSocket en ws://localhost:${ENV.PORT}/ws`);
 });
 
 // 🔥 REGISTRAR EL SERVIDOR DESPUÉS DE QUE YA ESTÉ ESCUCHANDO
-// ⚠️⚠️⚠️ CORRECCIÓN CRÍTICA: Elysia NO usa app.server para publish, usa app.ws
-const bunServer = app.ws; // ⬅️ ESTA es la instancia que tiene el método publish
+const bunServer = app.ws;
 if (bunServer) {
   registrarServidorWS(bunServer);
   console.log('✅ Servidor WebSocket registrado en publicador');

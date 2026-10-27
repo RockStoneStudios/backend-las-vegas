@@ -11,6 +11,7 @@ import { registrarServidorWS } from './shared/websocket/socket.publisher';
 import { logWS } from './shared/utils/logs';
 
 import { authController } from './modules/auth/auth.controller';
+import { subastasController } from './modules/subastas/subastas.controller';
 import { AuthService } from './modules/auth/auth.service';
 import { meseroController } from './modules/mesero/mesero.controller';
 import { MeseroService } from './modules/mesero/mesero.service';
@@ -35,14 +36,9 @@ const votacionesService = new VotacionesService();
 // =============================================================
 // 🔥 HEARTBEAT (un solo intervalo global para todas las conexiones)
 // =============================================================
-// El cliente tiene un watchdog de 60s: el intervalo de PING debe ser menor a eso.
-// El timeout es generoso (~3 pings perdidos) porque los celulares pausan el JS
-// de la pestaña en segundo plano y no pueden responder el PONG.
 const HEARTBEAT_INTERVALO = 25_000; // 25s entre PINGs
 const HEARTBEAT_TIMEOUT = 75_000;   // 75s sin actividad -> se cierra (código 4003)
 
-// Conexiones con heartbeat activo. Se guarda el `ws` del evento open.
-// El último pong y el flag "cerrado" viven en ws.data (que es estable entre eventos).
 const conexionesHeartbeat = new Set<any>();
 
 function iniciarHeartbeat(ws: any) {
@@ -56,13 +52,11 @@ setInterval(() => {
   for (const ws of conexionesHeartbeat) {
     const data = (ws.data ?? {}) as any;
 
-    // Conexión ya cerrada: limpiar
     if (data.cerrado) {
       conexionesHeartbeat.delete(ws);
       continue;
     }
 
-    // Demasiado tiempo sin actividad: cerrar
     if (ahora - (data.ultimoPong ?? 0) > HEARTBEAT_TIMEOUT) {
       logWS(`💀 [HEARTBEAT] Conexión muerta, cerrando mesa=${data.sesion?.mesa ?? '?'}`);
       conexionesHeartbeat.delete(ws);
@@ -70,7 +64,6 @@ setInterval(() => {
       continue;
     }
 
-    // Enviar PING
     try {
       ws.send(JSON.stringify({ tipo: 'PING', payload: { ts: ahora } }));
     } catch {
@@ -82,18 +75,12 @@ setInterval(() => {
 // =============================================================
 // 🔐 ADMIN DIRECTO (LEGADO)
 // =============================================================
-// ⚠️ SEGURIDAD: cualquier cliente que conecte con un sessionId que empiece por
-// 'a361' obtiene rol admin SIN validar nada contra la BD.
-// Cuando tu panel admin use una sesión real (AuthService.iniciarSesionAdmin),
-// pon WS_ADMIN_BYPASS=false en tu .env para cerrar este atajo.
 const ADMIN_BYPASS = process.env.WS_ADMIN_BYPASS !== 'false';
 const ADMIN_PREFIX = 'a361';
 
 // =============================================================
-// 📦 ESTADO INICIAL (para clientes que conectan o reconectan)
+// 📦 ESTADO INICIAL
 // =============================================================
-// Mientras un cliente estuvo desconectado se perdió eventos. Al abrir el socket
-// le enviamos el estado actual para que se re-sincronice.
 async function enviarEstadoInicial(ws: any) {
   try {
     const votacionSync = votacionesService.obtenerEstadoInicial();
@@ -134,6 +121,7 @@ const app = new Elysia({ adapter: node() })
   .use(cancionesController)
   .use(mesasController)
   .use(reservasController)
+  app.use(subastasController)
   .ws('/ws', {
     async open(ws) {
       logWS('🔵 [OPEN] NUEVA CONEXIÓN WEBSOCKET');
@@ -149,7 +137,7 @@ const app = new Elysia({ adapter: node() })
         return;
       }
 
-      // ADMIN - CONEXIÓN DIRECTA (legado, ver ADMIN_BYPASS arriba)
+      // ADMIN - CONEXIÓN DIRECTA
       if (ADMIN_BYPASS && sessionId.startsWith(ADMIN_PREFIX)) {
         logWS('🟢 [OPEN] ADMIN - CONEXIÓN DIRECTA');
 
@@ -183,8 +171,6 @@ const app = new Elysia({ adapter: node() })
       try {
         sesion = await authService.recuperarSesion(sessionId);
       } catch (error) {
-        // Si Mongo falla NO dejamos el socket abierto "a medias":
-        // 1011 no está en NO_RECONECTAR del cliente, así que reintenta con backoff.
         console.error('❌ [OPEN] Error recuperando sesión:', error);
         try { ws.close(1011, 'Error interno'); } catch {}
         return;
@@ -196,9 +182,8 @@ const app = new Elysia({ adapter: node() })
         return;
       }
 
-      // Escritura en BD sin bloquear la apertura (en reconexiones masivas ahorra latencia)
       authService.registrarConexion(sesion.sessionId).catch((e) => {
-        console.error('⚠️ [OPEN] Error registrando conexión:', e);
+        console.error('⚠ [OPEN] Error registrando conexión:', e);
       });
 
       const datosSesion: WsSessionData = {
@@ -216,15 +201,13 @@ const app = new Elysia({ adapter: node() })
       if (sesion.rol === 'admin' || sesion.rol === 'dj') ws.subscribe(Rooms.admin());
       if (['admin', 'dj', 'mesero'].includes(sesion.rol)) ws.subscribe(Rooms.staff());
 
-      // El heartbeat arranca ya, para que ninguna espera posterior deje un socket sin vigilar
       iniciarHeartbeat(ws);
 
-      // ENVIAR CONFIGURACIÓN DE PREMIOS
       try {
         const premiosConfig = await juegosService.obtenerConfiguracionPremios();
 
         if (!premiosConfig || premiosConfig.length === 0) {
-          console.warn('⚠️ [OPEN] El servicio devolvió una lista vacía de premios. No se envía nada.');
+          console.warn('⚠ [OPEN] El servicio devolvió una lista vacía de premios. No se envía nada.');
         } else {
           ws.send(JSON.stringify({
             tipo: 'EVENT:RULETA_CONFIGURACION_INICIAL',
@@ -236,7 +219,6 @@ const app = new Elysia({ adapter: node() })
         console.error('❌ [OPEN] Error al obtener o enviar premios:', error);
       }
 
-      // ESTADO ACTUAL (votación activa, modo pedir canción)
       await enviarEstadoInicial(ws);
 
       ws.send(JSON.stringify({
@@ -251,7 +233,6 @@ const app = new Elysia({ adapter: node() })
       const sesion = (ws.data as any).sesion as WsSessionData | undefined;
       if (!sesion) return;
 
-      // 🔥 Cualquier mensaje del cliente cuenta como "está vivo"
       (ws.data as any).ultimoPong = Date.now();
 
       let data: any;
@@ -264,7 +245,6 @@ const app = new Elysia({ adapter: node() })
 
       const { tipo, payload } = data ?? {};
 
-      // HEARTBEAT: el PONG ya se registró arriba
       if (tipo === 'PONG') return;
 
       logWS(`📨 [MESSAGE] ${tipo} - mesa ${sesion.mesa}`);
@@ -397,7 +377,7 @@ const app = new Elysia({ adapter: node() })
             break;
 
           default:
-            logWS(`⚠️ Evento no reconocido: ${tipo}`);
+            logWS(`⚠ Evento no reconocido: ${tipo}`);
         }
       } catch (error) {
         console.error('❌ Error:', error);
@@ -413,7 +393,6 @@ const app = new Elysia({ adapter: node() })
     close(ws, code, reason) {
       const sesion = (ws.data as any).sesion as WsSessionData | undefined;
 
-      // Marcamos la conexión como cerrada; el intervalo global la limpia del Set
       (ws.data as any).cerrado = true;
 
       logWS(`🔴 [CLOSE] Conexión cerrada - mesa=${sesion?.mesa ?? '?'} código=${code}`);
@@ -429,11 +408,8 @@ const server = app.listen(ENV.PORT, () => {
 });
 
 // 🔥 REGISTRAR EL SERVIDOR DESPUÉS DE QUE YA ESTÉ ESCUCHANDO
-// ⚠️ TODO: `app.ws` es el método de Elysia para declarar rutas WebSocket, NO el servidor,
-// y siempre es truthy. Revisar socket.publisher.ts para pasar aquí el objeto correcto.
-const bunServer = app.ws;
-if (bunServer) {
-  registrarServidorWS(bunServer);
+if (server) {
+  registrarServidorWS(server as any);
   console.log('✅ Servidor WebSocket registrado en publicador');
 } else {
   console.error('❌ No se pudo obtener el servidor de Bun');

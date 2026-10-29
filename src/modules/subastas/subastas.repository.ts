@@ -29,6 +29,9 @@ export class SubastasRepository {
       ...doc,
     } as unknown as ISubasta;
   }
+  async eliminarCerradas() {
+  return await this.collection.deleteMany({ estado: 'CERRADA' });
+}
 
   async findActiva() {
     return await this.collection.findOne({ estado: 'ACTIVA' });

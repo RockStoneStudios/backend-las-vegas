@@ -20,6 +20,10 @@ export class SubastasService {
     return await this.repo.findAll();
   }
 
+  async borrarHistorial() {
+    const result = await this.repo.eliminarCerradas();
+    return { eliminadas: result.deletedCount || 0 };
+  }
   // MESAS: pujar - tiene que ser MAYOR al precio actual
   async pujar(id: string, data: PujarDTO) {
     const subasta = await this.repo.findById(id);

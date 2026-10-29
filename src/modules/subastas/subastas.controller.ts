@@ -23,6 +23,11 @@ export const subastasController = new Elysia({ prefix: '/api/subastas' })
     })
   })
 
+  .delete('/api/subastas/historial', async () => {
+    const result = await service.borrarHistorial();
+    return { ok: true, data: result };
+  })
+
   // MESAS: ver subasta activa
   .get('/activa', async ({ set }) => {
     try {

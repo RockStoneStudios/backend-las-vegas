@@ -42,7 +42,10 @@ export class ReservasRepository {
       mesaId: new ObjectId(data.mesaId),
       clienteNombre: data.clienteNombre,
       clienteTelefono: data.clienteTelefono,
+      clienteEmail: data.clienteEmail, // <-- NUEVO CAMPO
       fecha: data.fecha,
+      hora: data.hora,                 // <-- NUEVO CAMPO
+      personas: data.personas,         // <-- NUEVO CAMPO
       montoAnticipo: data.montoAnticipo ?? 0,
       observaciones: data.observaciones ?? '',
       estado: 'CONFIRMADA',
@@ -51,10 +54,11 @@ export class ReservasRepository {
     };
 
     const result = await this.collection.insertOne(doc);
+    
     return {
       id: result.insertedId.toString(),
       ...doc,
-      mesaId: data.mesaId,
+      mesaId: data.mesaId, // Devolvemos el string original para el tipado
     } as unknown as IReserva;
   }
 

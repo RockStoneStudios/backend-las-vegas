@@ -1,6 +1,8 @@
 import { ReservasRepository } from './repository';
 import { MesasRepository } from '../mesas/mesa.repository';
 import { CreateReservaDTO } from './types';
+// Importamos la función de correos (Ajusta la ruta si tu carpeta services está en otro nivel)
+import { enviarCorreoReserva } from '../../services/emailService'; 
 
 export class ReservasService {
   private repository: ReservasRepository;
@@ -49,7 +51,29 @@ export class ReservasService {
       throw new Error('La mesa ya cuenta con una reserva activa para esa fecha');
     }
 
-    return await this.repository.create(data);
+    // 3. Guardar la reserva en la base de datos
+    const nuevaReserva = await this.repository.create(data);
+
+    // 4. 🚀 Enviar los correos (Cliente y Discoteca)
+    try {
+      await enviarCorreoReserva({
+        clienteNombre: data.clienteNombre,
+        clienteEmail: data.clienteEmail,
+        clienteTelefono: data.clienteTelefono,
+        // Como en la BD solo guardamos el ID de la mesa, aquí usamos el nombre o número 
+        // que viene del objeto 'mesa' que consultamos en el paso 1
+        mesa:  `Mesa ${mesa.numero}` || String(mesa.numero || 'Mesa asignada'), 
+        fecha: data.fecha,
+        hora: data.hora,
+        personas: data.personas,
+      });
+    } catch (errorCorreo) {
+      // Si el correo falla, solo lo mostramos en consola. La reserva ya fue exitosa.
+      console.error('⚠️ La reserva se guardó en BD, pero falló el envío del correo:', errorCorreo);
+    }
+
+    // Retornamos la reserva creada para que el Controller se la envíe al Frontend
+    return nuevaReserva;
   }
 
   async cambiarEstado(id: string, estado: string) {

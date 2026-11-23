@@ -301,12 +301,13 @@ export class AuthService {
   }
 
   // 🔥 Cerrar mesa - AHORA USA Rooms.mesa() (O(1) en vez de O(n))
-  async cerrarMesa(numeroMesa: number, _publicar?: Publicador) {
+   async cerrarMesa(numeroMesa: number, _publicar?: Publicador) {
+    console.log(`\n======================================================`);
+    console.log(`🚪 [CERRAR_MESA] Iniciando cierre de la mesa ${numeroMesa}`);
+    
     // 1. Eliminar TODAS las sesiones de la mesa
     const resultado = await this.repo.cerrarSesionesDeMesa(numeroMesa);
-
-    // 2. Invalidar cache de sesiones de esa mesa
-    // El TTL de 60s los limpia solo, pero podemos forzar la limpieza si es necesario.
+    console.log(`🗑️ [CERRAR_MESA] Sesiones eliminadas en BD: ${resultado.deletedCount}`);
 
     // 3. Enviar evento WebSocket a TODOS los clientes de la mesa
     const mensajeMesa = JSON.stringify({
@@ -318,12 +319,10 @@ export class AuthService {
       },
     });
     
-    // 👇 PUBLICAMOS EN EL CANAL DE LA MESA ESPECÍFICA
+    console.log(`📡 [CERRAR_MESA] Llamando a publicarEvento para canal: mesa:${numeroMesa}`);
     publicarEvento(Rooms.mesa(numeroMesa), mensajeMesa);
 
-    // 👇 AGREGAMOS ESTA LÍNEA: Publicar en el canal general también
-    // Esto asegura que si el cliente se suscribió al canal general (por reconexión),
-    // reciba el evento de cierre de mesa sin importar qué.
+    console.log(`📡 [CERRAR_MESA] Llamando a publicarEvento para canal: general`);
     publicarEvento(Rooms.general(), mensajeMesa);
 
     // 4. Notificar al staff
@@ -335,6 +334,9 @@ export class AuthService {
       },
     });
     publicarEvento(Rooms.staff(), mensajeStaff);
+
+    console.log(`✅ [CERRAR_MESA] Proceso terminado para mesa ${numeroMesa}`);
+    console.log(`======================================================\n`);
 
     return {
       exito: true,

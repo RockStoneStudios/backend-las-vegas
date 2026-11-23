@@ -134,6 +134,26 @@ export const authController = new Elysia({ prefix: '/api/auth' })
       return { ok: false, error: (error as Error).message };
     }
   })
+    // ======================================================
+  // 🔥 NUEVO - ¿SIGUE VIVA MI MESA? (Para la vida real)
+  // GET /api/auth/sesion/estado?mesa=4&sessionId=xxx
+  // ======================================================
+  .get(
+    '/sesion/estado',
+    async ({ query }) => {
+      const numeroMesa = Number(query.mesa);
+      const sessionId = query.sessionId;
+
+      // ✅ Ahora sí, todo pasa por el service
+      return await authService.verificarEstadoSesion(sessionId, numeroMesa);
+    },
+    {
+      query: t.Object({
+        mesa: t.String(),
+        sessionId: t.String({ minLength: 8 }),
+      }),
+    }
+  )
 
   // Login Staff con token
   .get(

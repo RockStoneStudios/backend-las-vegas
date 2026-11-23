@@ -300,16 +300,13 @@ export class AuthService {
     this.cacheSesiones.delete(sessionId);
   }
 
-  // 🔥 Cerrar mesa - AHORA USA Rooms.mesa() (O(1) en vez de O(n))
-   async cerrarMesa(numeroMesa: number, _publicar?: Publicador) {
+   // 🔥 Cerrar mesa - AHORA USA Rooms.mesa() (O(1) en vez de O(n))
+ async cerrarMesa(numeroMesa: number, _publicar?: Publicador) {
     console.log(`\n======================================================`);
-    console.log(`🚪 [CERRAR_MESA] Iniciando cierre de la mesa ${numeroMesa}`);
-    
-    // 1. Eliminar TODAS las sesiones de la mesa
-    const resultado = await this.repo.cerrarSesionesDeMesa(numeroMesa);
-    console.log(`🗑️ [CERRAR_MESA] Sesiones eliminadas en BD: ${resultado.deletedCount}`);
+    console.log(`🚪 [CERRAR_MESA] Iniciando cierre de la mesa ${numeroMesa} - ${new Date().toISOString()}`);
 
-    // 3. Enviar evento WebSocket a TODOS los clientes de la mesa
+    // 🔥 1. PRIMERO avisar al cliente, ANTES de tocar la BD
+    // Si está mirando la app, le llega al instante por WebSocket (Capa 1)
     const mensajeMesa = JSON.stringify({
       tipo: 'EVENT:MESA_CERRADA',
       payload: {
@@ -318,14 +315,37 @@ export class AuthService {
         mensaje: 'Tu sesión ha finalizado. ¡Gracias por visitarnos!',
       },
     });
-    
-    console.log(`📡 [CERRAR_MESA] Llamando a publicarEvento para canal: mesa:${numeroMesa}`);
+
+    console.log(`📡 [CERRAR_MESA] Publicando a canal: ${Rooms.mesa(numeroMesa)}`);
     publicarEvento(Rooms.mesa(numeroMesa), mensajeMesa);
 
-    console.log(`📡 [CERRAR_MESA] Llamando a publicarEvento para canal: general`);
-    publicarEvento(Rooms.general(), mensajeMesa);
+    // 🔥 2. Dale 150ms para que el mensaje salga por el socket
+    // Si borras y cierras de inmediato, el mensaje no alcanza a salir
+    await new Promise(r => setTimeout(r, 150));
 
-    // 4. Notificar al staff
+    // 🔥 3. NUEVO - DEJAR LA LÁPIDA ANTES DE BORRAR
+    // Esto es lo que salva la vida real.
+    // Cuando el cliente está en WhatsApp/Facebook, el WebSocket no le llega.
+    // Cuando vuelva a la app, va a preguntar por HTTP: "¿sigo vivo?"
+    // Si borramos sin dejar rastro, no sabemos si lo cerraron o si es un error.
+    // Con esta lápida, sí podemos decirle: "Sí, te cerraron".
+    try {
+      await this.repo.marcarMesaComoCerrada(numeroMesa);
+      console.log(`🪦 [CERRAR_MESA] Lápida guardada para mesa ${numeroMesa}`);
+    } catch (e) {
+      console.log(`⚠️ [CERRAR_MESA] No pude guardar lápida, sigo igual:`, e);
+      // No frenamos el cierre por esto, el WebSocket ya salió
+    }
+
+    // 4. AHORA SÍ invalida caché y borra en BD
+    // Si no haces esto, recuperarSesion() sigue devolviendo la sesión borrada por 60s
+    this.cacheSesiones.clear();
+    console.log(`🧹 [CERRAR_MESA] Caché de sesiones limpiado`);
+
+    const resultado = await this.repo.cerrarSesionesDeMesa(numeroMesa);
+    console.log(`🗑 [CERRAR_MESA] Sesiones eliminadas en BD: ${resultado.deletedCount}`);
+
+    // 5. Notificar al staff
     const mensajeStaff = JSON.stringify({
       tipo: 'EVENT:MESA_CERRADA_STAFF',
       payload: {
@@ -335,7 +355,7 @@ export class AuthService {
     });
     publicarEvento(Rooms.staff(), mensajeStaff);
 
-    console.log(`✅ [CERRAR_MESA] Proceso terminado para mesa ${numeroMesa}`);
+    console.log(`✅ [CERRAR_MESA] Proceso terminado para mesa ${numeroMesa} - ${new Date().toISOString()}`);
     console.log(`======================================================\n`);
 
     return {
@@ -344,6 +364,46 @@ export class AuthService {
       mesa: numeroMesa,
     };
   }
+
+  // ======================================================
+// 🔥 NUEVO - PARA LA VIDA REAL (【entity-WhatsApp¦canonical_name=WhatsApp】 / 【entity-Facebook¦canonical_name=Facebook】)
+// ======================================================
+
+// Lo llama el controller cuando el cliente vuelve de 【entity-WhatsApp¦canonical_name=WhatsApp】
+// y pregunta: "¿Ome, sigo vivo o ya me cerraron?"
+async verificarEstadoSesion(sessionId: string, numeroMesa: number) {
+  // 1. ¿Sigo vivo? Buscamos la sesión activa
+  // Usamos el repo, no el caché, porque el caché ya lo limpiamos en cerrarMesa
+  const sesion = await this.repo.buscarPorSessionId(sessionId);
+  if (sesion) {
+    return {
+      estado: 'ACTIVA' as const,
+      mesa: numeroMesa,
+    };
+  }
+
+  // 2. No estoy vivo, ¿fue porque me cerraron la mesa?
+  // Buscamos la lápida que dejamos en cerrarMesa()
+  const cerrada = await this.repo.buscarMesaCerradaReciente(numeroMesa);
+  if (cerrada) {
+    return {
+      estado: 'CERRADA' as const,
+      mesa: numeroMesa,
+      mensaje: 'Tu sesión ha finalizado. ¡Gracias por visitarnos!',
+    };
+  }
+
+  // 3. Ni vivo, ni lápida
+  return {
+    estado: 'NO_EXISTE' as const,
+    mesa: numeroMesa,
+  };
+}
+
+// Este es solo un puente, por si lo necesitás en otro lado
+async buscarMesaCerradaReciente(numeroMesa: number) {
+  return this.repo.buscarMesaCerradaReciente(numeroMesa);
+}
 
   async iniciarSesionAdmin(rol: 'admin' | 'dj' | 'mesero' = 'admin') {
     const sesionExistente = await this.repo.buscarPorRol(rol);
